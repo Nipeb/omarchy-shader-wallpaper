@@ -33,6 +33,41 @@ choose a new icon).
 Enabling the plugin disables the stock `omarchy.background`; disabling or
 removing it brings the stock one back.
 
+## Remove
+
+```sh
+omarchy plugin remove nipe.background
+```
+
+This brings the stock `omarchy.background` back. Setup leaves a few things
+outside the plugin folder; delete them if you want a clean slate:
+
+```sh
+rm -f ~/.local/bin/omarchy-wallpaper-shader ~/.local/bin/omarchy-wallpaper-icon
+rm -rf ~/.local/state/omarchy/wallpaper-shader ~/.config/omarchy/branding/wallpaper
+rm -f ~/.config/omarchy/wallpaper-shader.conf
+```
+
+The packages it installed (`cava`, `python-numpy`, `python-pillow`) are left in
+place; remove them with `omarchy pkg remove` if nothing else uses them.
+
+## What it touches
+
+- Installs `cava`, `python-numpy` and `python-pillow` with `omarchy-pkg-add`
+  (a sudo prompt) — only when missing, only during setup.
+- Disables the stock `omarchy.background` while enabled (Omarchy does this for
+  any plugin that declares `clonedFrom`), and restores it on disable/remove.
+- Symlinks two commands into `~/.local/bin` (never over a file that is not
+  already a symlink), and creates `~/.config/omarchy/wallpaper-shader.conf` and
+  `~/.config/omarchy/branding/wallpaper/` only if they do not exist. An icon
+  you already set is never replaced.
+- Runs a private `cava` process for audio reactivity, only while the wallpaper
+  is on and the style uses audio.
+- Network: the weather style calls Open-Meteo (and wttr.in for an IP-based
+  location when none is set). Nothing else touches the network.
+- `shaders/*.frag.qsb` are compiled shader bytecode built from the `.frag`
+  sources beside them (see "Working on the shaders").
+
 ## Use
 
 ```sh
