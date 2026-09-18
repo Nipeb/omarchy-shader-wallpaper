@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Pick or refresh the icon drawn in the middle of the shader wallpaper
-# (nipe.background plugin). Mirrors omarchy-branding-about/screensaver:
+# (nipe.shader-wallpaper plugin). Mirrors omarchy-branding-about/screensaver:
 # image|about|screensaver choose where the icon comes from.
 
 set -euo pipefail

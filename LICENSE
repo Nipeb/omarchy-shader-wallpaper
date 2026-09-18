@@ -1,0 +1,42 @@
+MIT License
+
+Copyright (c) 2026 Nils Petter Brekke
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---------------------------------------------------------------------------
+External dependencies
+---------------------------------------------------------------------------
+
+This plugin bundles no third-party code. It installs or uses the following,
+each under its own license and not covered by the license above:
+
+  cava              (MIT)     audio spectrum for music reactivity; installed
+                              from the Arch repositories when missing
+  python-numpy      (BSD-3)   icon rendering; installed when missing
+  python-pillow     (HPND)    icon rendering; installed when missing
+  Qt 6 / Quickshell           the runtime the plugin runs in (part of Omarchy)
+  qt6-shadertools   (LGPL/GPL) only to recompile shaders (`qsb`); not needed
+                              to run the plugin
+  Omarchy logo      (Omarchy) /usr/share/omarchy/icon.png is read from the
+                              installed Omarchy, not copied into this repo
+  Open-Meteo API    (CC BY 4.0, non-commercial free tier) weather data for the
+                              "weather" style; https://open-meteo.com
+  wttr.in                     optional IP-based location fallback for the
+                              weather style

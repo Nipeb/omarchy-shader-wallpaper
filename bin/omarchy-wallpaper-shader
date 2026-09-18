@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Control the animated shader wallpaper (nipe.background plugin): turn it on
+# Control the animated shader wallpaper (nipe.shader-wallpaper plugin): turn it on
 # or off, and cycle between styles. State is persisted so it survives a shell
 # restart; the running shell is also pinged over IPC for an instant update.
 

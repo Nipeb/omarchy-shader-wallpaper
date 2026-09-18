@@ -36,7 +36,7 @@ removing it brings the stock one back.
 ## Remove
 
 ```sh
-omarchy plugin remove nipe.background
+omarchy plugin remove nipe.shader-wallpaper
 ```
 
 This brings the stock `omarchy.background` back. Setup leaves a few things
@@ -134,3 +134,9 @@ journalctl --user _COMM=quickshell | grep -E 'Failed to compile|error C'
 | `bin/` | the commands above, the icon renderer and the setup |
 | `audio-cava.conf` | the private cava instance that feeds audio reactivity |
 | `wallpaper-shader.conf.default` | seed for the tuning file |
+| `LICENSE` | MIT, plus the external dependencies |
+
+## License
+
+MIT — see `LICENSE`, which also lists the external dependencies. Weather data
+is from [Open-Meteo](https://open-meteo.com).
