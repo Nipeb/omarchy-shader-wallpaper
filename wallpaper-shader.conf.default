@@ -1,0 +1,60 @@
+# Shader wallpaper tuning (nipe.background). Edit and save -- changes apply
+# live, no restart or command needed. Delete a line (or the whole file) to
+# fall back to its default. Lines starting with # are comments.
+
+# How strongly audioLevel (smoothed loudness) and audioPeak (beat/transient)
+# drive each shader. 1.0 = the subtle baseline tuned 2026-09-16. 0 = off.
+# Turn these up if the effect feels too quiet, or use `omarchy-wallpaper-shader
+# audio off` to disable audio reactivity entirely instead of setting to 0 here.
+audio_level_scale = 1.0
+audio_peak_scale = 1.0
+
+# How strongly the background pattern itself warps/bends around the icon's
+# silhouette (aurora's ribbons curling around branches, voronoi cells
+# compressing against it, etc). 1.0 = default, 0 = pattern ignores the icon.
+icon_warp_scale = 1.0
+
+# The icon's outline glow: width in texture texels (the mask/dist textures
+# are 1024x1024, so 2.0 is about a 2px-wide line at that resolution) and a
+# brightness multiplier. Raise edge_glow_width if the rim looks too thin/
+# jagged on the icon's fine knotwork detail; lower edge_glow_brightness to
+# tone the glow down without changing its width.
+edge_glow_width = 2.0
+edge_glow_brightness = 1.0
+
+# Thunder: how many seconds between natural ambient strikes, min/max of a
+# random range. Loud moments in music can add strikes between these.
+thunder_ambient_min_s = 7.0
+thunder_ambient_max_s = 20.0
+
+# Thunder: how much rain hangs between the deck and ocean. It is deliberately
+# near the edge of visible; a strike briefly catches the streaks.
+thunder_rain = 0.20
+
+# Ember drift: how many motes are in the air (1.0 = default).
+ember_density = 1.0
+
+# Nebula: overall speed of the galactic rotation, the orbiting core and the
+# star parallax (1.0 = default).
+nebula_drift = 1.0
+
+# Ink: speed of the flow field carrying the ink (1.0 = default).
+ink_flow = 1.0
+
+# Aurora: how far (in degrees round the colour wheel) the hem and crown are
+# turned away from the accent. 0 = one colour, ~60 = default, 90+ = vivid.
+aurora_hue_spread = 60
+
+# Aurora: how strongly the curtains break into separate rays (0 = smooth
+# sheets, 1 = default fringe of streaks of uneven length).
+aurora_rays = 1.0
+
+# Weather: preview a condition instead of the live weather. A WMO weather
+# code (0 clear, 2 partly cloudy, 3 overcast, 45 fog, 53 drizzle, 63 rain,
+# 65 heavy rain, 73 snow, 75 heavy snow, 95 thunderstorm), or -1 for live.
+weather_preview_code = -1
+
+# Weather: preview a time of day instead of the real sun. 0..1 runs from
+# sunrise to sunset (0.5 = noon), 1..2 from sunset to the next sunrise
+# (1.5 = midnight), or -1 for live.
+weather_preview_phase = -1

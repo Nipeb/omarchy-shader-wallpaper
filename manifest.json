@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "nipe.background",
+  "name": "Shader Wallpaper",
+  "version": "2.0.0",
+  "author": "nipe",
+  "description": "Animated, theme-colored and music-reactive GLSL wallpaper: aurora, thunderstorm, embers, nebula, ink and live weather, built around an icon of your choice. Replaces the stock background.",
+  "kinds": [
+    "service"
+  ],
+  "entryPoints": {
+    "service": "Background.qml"
+  },
+  "omarchy": {
+    "clonedFrom": "omarchy.background"
+  }
+}

@@ -1,0 +1,103 @@
+#!/bin/bash
+
+# First-run setup for the shader wallpaper plugin. The plugin's service starts
+# this in a terminal the first time it loads (i.e. right after
+# `omarchy plugin add`), because a git-installed plugin has no install hook.
+# Safe to run again at any time to repair or redo any step.
+#
+#   omarchy-wallpaper-setup          finish setup (asks for an icon only if none is set)
+#   omarchy-wallpaper-setup --pick   always ask for a new icon
+
+set -uo pipefail
+
+BIN=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
+PLUGIN=$(dirname "$BIN")
+source "$BIN/wallpaper-common.sh"
+MARKER="$STATE_DIR/setup-done"
+mkdir -p "$STATE_DIR" "$ASSET_DIR" "$HOME/.local/bin"
+
+# One setup at a time: a shell reload during first run must not stack windows.
+exec 9>"$STATE_DIR/setup.lock"
+flock -n 9 || { echo "Setup is already running in another window."; exit 0; }
+
+force_pick=0
+[[ ${1:-} == --pick ]] && force_pick=1
+
+say() { printf '\n\033[1m%s\033[0m\n' "$*"; }
+
+# ---- 1. Packages ------------------------------------------------------------
+say "Checking dependencies"
+need=()
+command -v cava >/dev/null 2>&1 || need+=(cava)
+pick_python >/dev/null || need+=(python-numpy python-pillow)
+
+if (( ${#need[@]} )); then
+  echo "Installing: ${need[*]}"
+  if ! omarchy-pkg-add "${need[@]}"; then
+    say "Could not install ${need[*]}."
+    echo "Setup will run again the next time the shell starts, or run: omarchy-wallpaper-setup"
+    exit 1
+  fi
+fi
+pick_python >/dev/null || { say "python-numpy / python-pillow still not importable."; exit 1; }
+echo "cava, numpy and Pillow are present."
+
+# ---- 2. Commands ------------------------------------------------------------
+for cmd in omarchy-wallpaper-shader omarchy-wallpaper-icon; do
+  link="$HOME/.local/bin/$cmd"
+  if [[ -L $link || ! -e $link ]]; then
+    ln -sfn "$BIN/$cmd" "$link"
+  else
+    echo "Leaving your existing $link alone."
+  fi
+done
+
+# ---- 3. Tuning file ---------------------------------------------------------
+# Lives outside the plugin folder so `omarchy plugin update` never trips on it.
+[[ -e $CONFIG_FILE ]] || cp "$PLUGIN/wallpaper-shader.conf.default" "$CONFIG_FILE"
+
+# ---- 4. Icon ----------------------------------------------------------------
+if (( force_pick )) || [[ ! -f $ASSET_DIR/mask.png || ! -f $ASSET_DIR/dist.png ]]; then
+  say "Pick a PNG for the middle of your wallpaper"
+  echo "Its outline is what the wallpaper draws and bends around, so a shape on a"
+  echo "transparent background works best. Cancel the chooser to keep the Omarchy logo."
+
+  while :; do
+    image=$(omarchy-file-select --title "Pick a PNG for the shader wallpaper" --extensions "png")
+    case $? in
+    0) ;;
+    1) image="" ;;
+    *)
+      # No desktop file chooser available: ask for a path instead.
+      image=$(gum input --placeholder "/path/to/icon.png (empty to skip)" --prompt "PNG path: ") || image=""
+      image="${image/#\~/$HOME}"
+      ;;
+    esac
+
+    if [[ -z $image ]]; then
+      "$BIN/omarchy-wallpaper-icon" omarchy
+      echo "Using the Omarchy logo. Pick your own later with: omarchy-wallpaper-icon image"
+      break
+    fi
+    if "$BIN/omarchy-wallpaper-icon" image "$image"; then
+      echo "Using $image"
+      break
+    fi
+    echo "Could not read that as an image."
+    gum confirm "Pick another file?" || { "$BIN/omarchy-wallpaper-icon" omarchy; break; }
+  done
+fi
+
+# ---- 5. Switch it on --------------------------------------------------------
+[[ -e $STATE_DIR/shader ]] || echo aurora > "$STATE_DIR/shader"
+"$BIN/omarchy-wallpaper-shader" on
+date -Is > "$MARKER"
+
+say "Shader wallpaper is on."
+cat <<TXT
+  omarchy-wallpaper-shader next|prev|set <style>|toggle|audio toggle
+  omarchy-wallpaper-icon image        pick a different PNG
+  $CONFIG_FILE   live tuning
+
+Bind keys to those commands in ~/.config/hypr/bindings.lua if you like.
+TXT

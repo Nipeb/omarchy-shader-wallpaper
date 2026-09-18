@@ -1,0 +1,70 @@
+#!/bin/bash
+
+# Current conditions for the "weather" shader wallpaper, as one JSON line.
+# Resolves the location exactly the way the Omarchy weather widget does, so
+# the wallpaper always shows the same place: stored coordinates from
+# ~/.local/state/omarchy/settings/weather.json, else that file's name
+# geocoded, else IP auto-detect via wttr.in. Conditions come from Open-Meteo,
+# the widget's own source. The last good answer is cached and replayed on
+# failure, so a network blip never blanks the sky.
+
+set -uo pipefail
+
+LOC_FILE="$HOME/.local/state/omarchy/settings/weather.json"
+CACHE="$HOME/.local/state/omarchy/wallpaper-shader/weather.json"
+mkdir -p "$(dirname "$CACHE")"
+
+fail() {
+  if [[ -s $CACHE ]]; then
+    jq -c '. + {stale: true}' "$CACHE"
+  else
+    echo '{"ok":false}'
+  fi
+  exit 0
+}
+
+lat="" lon="" name=""
+if [[ -f $LOC_FILE ]]; then
+  lat=$(jq -r '.latitude // empty' "$LOC_FILE" 2>/dev/null)
+  lon=$(jq -r '.longitude // empty' "$LOC_FILE" 2>/dev/null)
+  name=$(jq -r '.name // empty' "$LOC_FILE" 2>/dev/null)
+fi
+
+if [[ -z $lat || -z $lon ]] && [[ -n $name ]]; then
+  q=$(jq -rn --arg n "$name" '$n | @uri')
+  geo=$(curl -fsS --max-time 6 "https://geocoding-api.open-meteo.com/v1/search?name=${q}&count=1" 2>/dev/null) || geo=""
+  lat=$(jq -r '.results[0].latitude // empty' <<<"$geo" 2>/dev/null)
+  lon=$(jq -r '.results[0].longitude // empty' <<<"$geo" 2>/dev/null)
+fi
+
+if [[ -z $lat || -z $lon ]]; then
+  area=$(curl -fsS --max-time 8 "https://wttr.in/?format=j1" 2>/dev/null) || fail
+  lat=$(jq -r '.nearest_area[0].latitude // empty' <<<"$area" 2>/dev/null)
+  lon=$(jq -r '.nearest_area[0].longitude // empty' <<<"$area" 2>/dev/null)
+  [[ -z $name ]] && name=$(jq -r '.nearest_area[0].areaName[0].value // empty' <<<"$area" 2>/dev/null)
+fi
+[[ -n $lat && -n $lon ]] || fail
+
+url="https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}"
+url+="&current=weather_code,is_day,temperature_2m,wind_speed_10m,cloud_cover,precipitation"
+url+="&daily=sunrise,sunset&forecast_days=2&timezone=auto&timeformat=unixtime"
+data=$(curl -fsS --max-time 8 "$url" 2>/dev/null) || fail
+
+out=$(jq -c --arg name "$name" '{
+  ok: true,
+  place: $name,
+  code: .current.weather_code,
+  isDay: .current.is_day,
+  temp: .current.temperature_2m,
+  wind: .current.wind_speed_10m,
+  cloud: .current.cloud_cover,
+  precip: .current.precipitation,
+  sunrise: .daily.sunrise[0],
+  sunset: .daily.sunset[0],
+  sunriseNext: .daily.sunrise[1],
+  fetched: now | floor
+}' <<<"$data" 2>/dev/null) || fail
+[[ $(jq -r '.code // empty' <<<"$out") != "" ]] || fail
+
+echo "$out" >"$CACHE"
+echo "$out"

@@ -1,0 +1,106 @@
+#!/bin/bash
+
+# Pick or refresh the icon drawn in the middle of the shader wallpaper
+# (nipe.background plugin). Mirrors omarchy-branding-about/screensaver:
+# image|about|screensaver choose where the icon comes from.
+
+set -euo pipefail
+
+BIN=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
+source "$BIN/wallpaper-common.sh"
+RENDER="$BIN/omarchy-wallpaper-icon-render.py"
+mkdir -p "$ASSET_DIR"
+
+notify_shell() {
+  omarchy-shell -q wallpaperShader refreshIcon >/dev/null 2>&1 || true
+}
+
+# Render into temporary files and move them into place only on success, so a
+# file that turns out not to be an image never leaves a half-written icon.
+render() {
+  local py tmp_mask tmp_dist
+  py=$(pick_python) || {
+    echo "omarchy-wallpaper-icon: needs python-numpy and python-pillow (run omarchy-wallpaper-setup)" >&2
+    return 1
+  }
+  tmp_mask=$(mktemp "$ASSET_DIR/.mask.XXXXXX.png")
+  tmp_dist=$(mktemp "$ASSET_DIR/.dist.XXXXXX.png")
+  if "$py" "$RENDER" "$@" "$tmp_mask" "$tmp_dist"; then
+    chmod 644 "$tmp_mask" "$tmp_dist"
+    mv "$tmp_mask" "$ASSET_DIR/mask.png"
+    mv "$tmp_dist" "$ASSET_DIR/dist.png"
+  else
+    rm -f "$tmp_mask" "$tmp_dist"
+    return 1
+  fi
+}
+
+OMARCHY_ICON="${OMARCHY_PATH:-/usr/share/omarchy}/icon.png"
+
+case "${1:-}" in
+image)
+  image="${2:-}"
+  if [[ -z $image ]]; then
+    image=$(omarchy-file-select --title "Pick a PNG for the shader wallpaper icon" --extensions "png") || exit 0
+  fi
+  [[ -f $image ]] || { echo "omarchy-wallpaper-icon: no such file: $image" >&2; exit 1; }
+  ext="${image##*.}"
+  dest="$ASSET_DIR/source.${ext,,}"
+  render "$image"
+  [[ $image -ef $dest ]] || cp "$image" "$dest"
+  echo "image" > "$ASSET_DIR/mode.txt"
+  notify_shell
+  ;;
+omarchy)
+  # The Omarchy logo that ships with Omarchy -- the default.
+  [[ -f $OMARCHY_ICON ]] || { echo "omarchy-wallpaper-icon: $OMARCHY_ICON not found" >&2; exit 1; }
+  render "$OMARCHY_ICON"
+  echo "omarchy" > "$ASSET_DIR/mode.txt"
+  notify_shell
+  ;;
+none)
+  # No icon: the wallpaper runs without a mark in the middle.
+  render --blank
+  echo "none" > "$ASSET_DIR/mode.txt"
+  notify_shell
+  ;;
+about)
+  render --braille "$HOME/.config/omarchy/branding/about.txt"
+  echo "about" > "$ASSET_DIR/mode.txt"
+  notify_shell
+  ;;
+screensaver)
+  render --braille "$HOME/.config/omarchy/branding/screensaver.txt"
+  echo "screensaver" > "$ASSET_DIR/mode.txt"
+  notify_shell
+  ;;
+reset)
+  # Back to this machine's own default (default-source.png, if one was set
+  # aside), otherwise the Omarchy logo.
+  if [[ -f $ASSET_DIR/default-source.png ]]; then
+    render "$ASSET_DIR/default-source.png"
+    cp "$ASSET_DIR/default-source.png" "$ASSET_DIR/source.png"
+    echo "image" > "$ASSET_DIR/mode.txt"
+    notify_shell
+  else
+    exec "$0" omarchy
+  fi
+  ;;
+current)
+  cat "$ASSET_DIR/mode.txt" 2>/dev/null || echo "omarchy"
+  ;;
+*)
+  cat >&2 <<USAGE
+Usage: omarchy-wallpaper-icon <image [file.png]|omarchy|none|about|screensaver|reset|current>
+
+  image [file]   Use a PNG (asks with a file chooser when no file is given)
+  omarchy        Use the Omarchy logo (the default)
+  none           Run the wallpaper without an icon
+  about          Use the Omarchy about branding
+  screensaver    Use the Omarchy screensaver branding
+  reset          Restore this machine's default icon (the Omarchy logo unless one was set aside)
+  current        Show where the icon currently comes from
+USAGE
+  exit 1
+  ;;
+esac

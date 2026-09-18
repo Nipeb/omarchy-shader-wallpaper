@@ -1,0 +1,5 @@
+# Retired styles kept locally in case one comes back; not part of the plugin.
+shaders/retired/
+__pycache__/
+*.bak*
+/wallpaper-shader.conf
