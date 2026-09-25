@@ -193,43 +193,92 @@ float nearRidge(float x, float py) {
     return inTree > 0.5 ? top : base;
 }
 
-// Relief on a mountain face: ridged noise stretched downhill, so it reads
-// as gullies and spurs running down from the crest.
-float gully(vec2 q) {
+// Crag relief: ridged noise whose octaves are each rotated, so no layer
+// lines up with the screen axes and nothing reads as stripes.
+float crag(vec2 q) {
     float v = 0.0, a = 0.5;
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 5; i++) {
         v += a * (1.0 - abs(vnoise(q) * 2.0 - 1.0));
-        q = q * 2.1 + vec2(3.7, 1.3); a *= 0.5;
+        q = mat2(1.6, 1.2, -1.2, 1.6) * q + vec2(3.1, 7.7);
+        a *= 0.5;
     }
     return v;
 }
 
-// Aerial perspective + slope lighting for one mountain range.
-vec3 shadeRange(vec2 p, float ridgeY, float slope, float depth, vec3 rock) {
+// Height of the rock surface on a mountain face, domain-warped so buttresses
+// and gullies wander instead of running in rulings.
+float faceHeight(vec2 p, float seed) {
+    vec2 w = vec2(fbm3(p * vec2(5.0, 9.0) + seed), fbm3(p * vec2(5.0, 9.0) + seed + 4.3)) - 0.5;
+    return crag(vec2(p.x * 15.0, p.y * 24.0) + w * 1.7 + seed);
+}
+
+// One mountain range: rock lit through real surface normals, ledges, forest
+// on the lower slopes, snow that reaches further down in the hollows, drifting
+// cloud shadows, a rim of light along the crest when backlit, and the air in
+// front of it all.
+vec3 shadeRange(vec2 p, float ridgeY, float slope, float depth, vec3 rock, float seed) {
     vec3 air = mix(gSkyLow, gSkyTop, 0.25);
-    // Faces turned toward the sun catch it; normal ~ (dY/dx, -1).
-    // Normal: the crest's own slope near the top, the face relief below.
-    float below0 = max(p.y - ridgeY, 0.0);
-    vec2 q = vec2(p.x * 16.0 + p.y * 3.0, p.y * 3.5) + depth * 17.0;
-    const float e = 0.03;
-    float hC = gully(q);
-    vec2 grad = vec2(gully(q + vec2(e, 0.0)) - hC, gully(q + vec2(0.0, e)) - hC) / e;
-    vec2 n = normalize(vec2(slope * exp(-below0 * 30.0) + grad.x * 0.16, -1.0));
-    vec2 toSun = normalize(gBody - p + vec2(1e-4));
-    float lit = clamp(dot(n, toSun), 0.0, 1.0) * (0.35 + 0.65 * gDaylight) * (1.0 - gGloom * 0.7);
-    float below = clamp((p.y - ridgeY) / 0.12, 0.0, 1.0);
-    vec3 c = rock * (0.55 + 0.9 * lit) * (1.0 - below * 0.35);
-    // Rock texture: strata and gullies.
-    c *= 0.88 + 0.22 * fbm3(vec2(p.x * 26.0, p.y * 40.0 + p.x * 9.0));
-    // Snow above a line set by the temperature.
+    float below = max(p.y - ridgeY, 0.0);
     float alt = WL - p.y;
-    float snowAlt = mix(0.30, 0.03, clamp(gCold + wxSnow * 0.8, 0.0, 1.0))
-                  + (fbm3(vec2(p.x * 30.0, 1.0)) - 0.5) * 0.04;
-    float snow = smoothstep(snowAlt, snowAlt + 0.012, alt) * step(0.02, gCold + wxSnow);
-    vec3 snowCol = mix(fgColor.rgb, gSkyLow, 0.35) * (0.45 + 0.75 * lit + 0.2 * gDaylight);
-    c = mix(c, snowCol, snow * (0.55 + 0.45 * smoothstep(0.0, 0.4, lit + 0.2)));
-    // Distance: hazes into the air colour.
-    return mix(c, air, depth);
+
+    // Surface normal (x right, y up, z toward us): relief gradient plus the
+    // crest's own slope right at the top, and faces lean back toward the sky.
+    const float e = 0.0016;
+    float h0 = faceHeight(p, seed);
+    float hx = faceHeight(p + vec2(e, 0.0), seed);
+    float hy = faceHeight(p + vec2(0.0, e), seed);
+    const float k = 0.016;
+    vec3 n = normalize(vec3(-(hx - h0) / e * k + slope * exp(-below * 45.0) * 0.9,
+                            (hy - h0) / e * k + 0.30,
+                            1.0));
+
+    float sunStrength = gIsDay ? (0.25 + 0.75 * gDaylight) * (1.0 - gGloom * 0.75)
+                               : 0.22 * (0.5 - 0.5 * cos(moonPhase * 2.0 * PI)) * (1.0 - gGloom * 0.8);
+    vec3 L = normalize(vec3(gBody.x - p.x, p.y - gBody.y, 0.30));
+    float direct = max(dot(n, L), 0.0) * sunStrength;
+    float ambient = 0.40 + 0.30 * n.y;
+    float ao = 0.62 + 0.38 * smoothstep(0.25, 0.8, h0);
+
+    vec3 skyTint = mix(gSkyTop, gSkyLow, 0.5);
+    vec3 c = rock * (skyTint * 1.6 * ambient + gSunLight * direct * 1.3) * ao;
+
+    // Ledges: broken bands of strata, dark under a lit lip.
+    float sb = fract(alt * 34.0 + (fbm3(p * vec2(9.0, 4.0) + seed) - 0.5) * 3.0 + (h0 - 0.5) * 1.5);
+    float bandOn = smoothstep(0.55, 0.8, fbm3(p * vec2(14.0, 5.0) + seed)) * (1.0 - depth);
+    c *= 1.0 - smoothstep(0.78, 1.0, sb) * bandOn * 0.30;
+    c *= 1.0 + smoothstep(0.18, 0.0, sb) * bandOn * 0.15 * (0.3 + direct);
+    // Fine grain.
+    c *= 0.88 + 0.24 * fbm3(p * vec2(90.0, 140.0) + seed);
+
+    // Forest on the lower slopes, thinning out upward.
+    float treeAlt = 0.035 + 0.035 * fbm3(vec2(p.x * 3.0 + seed, 2.0)) - depth * 0.02;
+    float forest = smoothstep(treeAlt + 0.004, treeAlt - 0.010, alt) * smoothstep(-0.2, 0.25, n.y);
+    float crowns = smoothstep(0.3, 0.8, vnoise(p * vec2(520.0, 380.0) + seed));
+    vec3 forestCol = mix(bgColor.rgb * 0.55, mix(mutedColor.rgb, accentColor.rgb, 0.35) * 0.6, 0.5);
+    forestCol *= (0.55 + 0.45 * crowns) * (skyTint * 1.1 * ambient + gSunLight * direct * 0.9);
+    c = mix(c, forestCol, forest * 0.9);
+
+    // Snow: temperature sets the line; hollows and gentle faces hold it lower.
+    float coldness = clamp(gCold + wxSnow * 0.8, 0.0, 1.0);
+    float snowAlt = mix(0.30, 0.03, coldness) + (fbm3(vec2(p.x * 30.0, seed)) - 0.5) * 0.03
+                  - (0.55 - h0) * 0.06 - n.y * 0.02;
+    float snow = smoothstep(snowAlt, snowAlt + 0.010, alt) * step(0.02, gCold + wxSnow);
+    vec3 snowCol = mix(fgColor.rgb, gSkyLow, 0.30) * (skyTint * 0.9 * ambient + gSunLight * direct * 1.4 + 0.12);
+    c = mix(c, snowCol, snow * 0.95);
+
+    // Shadows of passing clouds.
+    if (gIsDay) {
+        float cs = smoothstep(0.52, 0.72, fbm3(vec2(p.x * 1.3 - gDrift * 0.9, p.y * 3.0 + seed)));
+        c *= 1.0 - cs * 0.45 * gDaylight * smoothstep(0.05, 0.3, gCover) * smoothstep(1.0, 0.75, gCover);
+    }
+
+    // Backlit crest: a thin rim of light where the sun or moon sits behind.
+    float rim = exp(-below / 0.0016) * exp(-abs(p.x - gBody.x) * 1.4) * sunStrength;
+    c += gSunLight * rim * 0.8;
+
+    // Air: farther ranges and lower slopes sink into the haze.
+    float hazeAmt = clamp(depth + (1.0 - exp(-below * 7.0)) * 0.14, 0.0, 0.95);
+    return mix(c, air, hazeAmt);
 }
 
 // ----------------------------------------------------------------- sky ---
@@ -362,7 +411,7 @@ vec3 skyAt(vec2 p, bool refl) {
     if (p.y > fr) {
         float sl = (farRidge(p.x + 0.012) - farRidge(p.x - 0.012)) / 0.024;
         vec3 rock = mix(mutedColor.rgb, bgColor.rgb, 0.4);
-        col = shadeRange(p, fr, sl, 0.62, rock);
+        col = shadeRange(p, fr, sl, 0.60, rock, 1.0);
     }
     // Valley fog lies between the ranges.
     float haze = 0.12 + wxFog * 0.7 + (gIsDay ? smoothstep(0.18, 0.0, sunPhase) * 0.45 : 0.0);
@@ -375,7 +424,7 @@ vec3 skyAt(vec2 p, bool refl) {
     if (p.y > mr) {
         float sl = (midRidge(p.x + 0.012) - midRidge(p.x - 0.012)) / 0.024;
         vec3 rock = mix(mutedColor.rgb, bgColor.rgb, 0.65);
-        col = shadeRange(p, mr, sl, 0.34, rock);
+        col = shadeRange(p, mr, sl, 0.30, rock, 7.0);
     }
     float fogBand2 = exp(-pow((p.y - (WL - 0.008)) / 0.018, 2.0))
                    * (0.5 + 0.8 * fbm3(vec2(p.x * 3.0 + time * 0.011, p.y * 30.0 + 4.0)));
@@ -383,9 +432,14 @@ vec3 skyAt(vec2 p, bool refl) {
 
     float nr = nearRidge(p.x, p.y);
     if (p.y > nr) {
-        vec3 forest = mix(bgColor.rgb * 0.45, mutedColor.rgb * 0.35, 0.3);
-        forest = mix(forest, mix(fgColor.rgb, gSkyLow, 0.4) * 0.6, wxSnow * 0.55 + gCold * 0.25);
-        col = mix(forest, mix(gSkyLow, gSkyTop, 0.25), 0.18);
+        // A dark wall of forest: individual crowns, their tops catching sky.
+        float crowns = vnoise(p * vec2(640.0, 420.0));
+        float topLight = exp(-(p.y - nr) / 0.004);
+        vec3 forest = mix(bgColor.rgb * 0.40, mix(mutedColor.rgb, accentColor.rgb, 0.3) * 0.40, 0.45);
+        forest *= 0.65 + 0.55 * crowns;
+        forest += gSkyLow * topLight * 0.10 + gSunLight * topLight * 0.10 * gDaylight * (1.0 - gGloom);
+        forest = mix(forest, mix(fgColor.rgb, gSkyLow, 0.4) * 0.6 * (0.7 + 0.3 * crowns), wxSnow * 0.55 + gCold * 0.25);
+        col = mix(forest, mix(gSkyLow, gSkyTop, 0.25), 0.16);
     }
 
     // Distant rain shafts under the clouds.
@@ -400,26 +454,48 @@ vec3 skyAt(vec2 p, bool refl) {
 
 // --------------------------------------------------------------- foreground ---
 
-// A big spruce: tiered, jagged, swaying at the top.
-float spruce(vec2 p, float cx, float topY, float halfBase, float seed, out float tierTop) {
-    tierTop = 0.0;
+// A big spruce: tiers of drooping boughs, each side its own length, a fringe
+// of needles on every edge, swaying at the top. `snowTop` marks the upper
+// face of each bough, `edgeSide` the outline (signed by side, for rim light).
+float spruce(vec2 p, float cx, float topY, float halfBase, float seed,
+             out float snowTop, out float edgeSide) {
+    snowTop = 0.0;
+    edgeSide = 0.0;
     if (p.y < topY) return 0.0;
     float H = 0.52 - topY;
     float u = (p.y - topY) / H;
-    float tiers = 9.0 + hash1(seed) * 4.0;
-    float tier = fract(u * tiers + hash1(seed * 3.0));
-    float w = halfBase * pow(u, 0.9) * (0.62 + 0.38 * tier);
-    w *= 0.82 + 0.36 * vnoise(vec2(p.y * 160.0, seed * 11.0));
-    float sway = sin(time * (0.6 + wxWind * 1.2) + seed * 5.0) * (0.002 + wxWind * 0.010) * (1.0 - u);
-    float dx = abs(p.x - cx - sway);
-    float trunk = step(dx, 0.005) * step(0.9, u);
-    // Branch tops: inside here, but open air a few pixels above.
-    float uA = (p.y - 0.006 - topY) / H;
-    float tierA = fract(uA * tiers + hash1(seed * 3.0));
-    float wA = halfBase * pow(max(uA, 0.0), 0.9) * (0.62 + 0.38 * tierA)
-             * (0.82 + 0.36 * vnoise(vec2((p.y - 0.006) * 160.0, seed * 11.0)));
-    tierTop = step(dx, w) * (uA < 0.0 ? 1.0 : smoothstep(wA - 0.002, wA + 0.002, dx));
-    return max(smoothstep(w + 0.0015, w - 0.0015, dx), trunk);
+    float sway = sin(time * (0.6 + wxWind * 1.2) + seed * 5.0) * (0.002 + wxWind * 0.010) * (1.0 - u)
+               + sin(time * 2.3 + seed) * 0.0008 * wxWind * (1.0 - u);
+    float x = p.x - cx - sway;
+    float side = x < 0.0 ? -1.0 : 1.0;
+    float tiers = 12.0 + hash1(seed) * 5.0;
+    // Boughs droop: the farther from the trunk, the lower each tier sits,
+    // so tiers read as hanging chevrons rather than flat slabs.
+    float droop = abs(x) / max(halfBase * pow(u, 0.85), 1e-3);
+    float tu = u * tiers + hash1(seed * 3.0) + 0.35 * sin(u * 17.0 + seed) - droop * 0.55;
+    float ti = floor(tu);
+    float f = fract(tu);
+    float reach = 0.70 + 0.50 * hash1(ti * 7.3 + seed * 1.9 + side * 1.7);
+    // Bough profile: tucked at its top, widest where it droops, then tucked
+    // under again.
+    float prof = pow(f, 0.55) * (1.0 - 0.30 * smoothstep(0.82, 1.0, f));
+    // Ragged, asymmetric silhouette: each side wanders on its own, so the
+    // tiers blur into boughs instead of stacking as cones.
+    float ragged = 0.82 + 0.32 * fbm3(vec2(u * 22.0, side * 3.0 + seed * 5.0));
+    float w = halfBase * pow(u, 0.85) * (0.55 + 0.45 * prof) * reach * ragged;
+    // Needle fringe: clumps along the bough edge, not per-scanline noise.
+    vec2 np = vec2(x * 90.0, p.y * 140.0) + seed * 13.0;
+    w *= 0.78 + 0.34 * fbm3(np) + 0.14 * vnoise(np * 3.1);
+    w = max(w, 0.0015);
+    float dx = abs(x);
+    float m = smoothstep(w + 0.0012, w - 0.0012, dx);
+    float trunk = smoothstep(0.0055, 0.0040, dx) * step(0.88, u);
+    // Snow lies on the upper face of each bough, out toward its drooping tip,
+    // in clumps.
+    snowTop = m * smoothstep(0.16, 0.02, f) * smoothstep(0.35, 0.8, dx / w)
+            * smoothstep(0.35, 0.6, vnoise(vec2(x * 160.0, p.y * 90.0) + seed));
+    edgeSide = m * smoothstep(0.0045, 0.0, w - dx) * side;
+    return max(m, trunk);
 }
 
 // ------------------------------------------------------------------ main ---
@@ -516,6 +592,9 @@ void main() {
             }
             float rays = pow(acc / 12.0, 3.0) * exp(-length(p - gBody) * 1.8);
             float strength = smoothstep(0.12, 0.35, gCover) * smoothstep(0.92, 0.6, gCover);
+            // Shafts are seen against the sky; the ranges stand in front of them.
+            float land = min(farRidge(p.x), midRidge(p.x));
+            strength *= 0.15 + 0.85 * smoothstep(land + 0.004, land - 0.004, p.y);
             col += gSunLight * rays * strength * 0.22 * (1.0 - wxFog * 0.6);
         }
 
@@ -585,34 +664,100 @@ void main() {
         col = vec3(0.0);   // shore, painted below
     }
 
-    // ---- shore ----
-    float ground = step(shoreY, p.y);
-    // Grass: two layers of blades bending with the wind.
-    float grass = 0.0;
-    for (int layer = 0; layer < 2; layer++) {
-        float dens = layer == 0 ? 190.0 : 320.0;
-        float cell = floor(p.x * dens);
-        float h = hash1(cell * 1.3 + float(layer) * 17.0);
-        float bladeH = (layer == 0 ? 0.026 : 0.014) * (0.35 + h);
-        float baseY = shoreY + (layer == 0 ? 0.004 : 0.0);
-        float tt = (baseY - p.y) / bladeH;             // 0 root, 1 tip
-        if (tt > 0.0 && tt < 1.0) {
-            float lean = (0.25 + wxWind * 1.1) * (0.6 + 0.4 * sin(time * (1.3 + h) + p.x * 4.0 + h * 9.0));
-            float cx = (cell + 0.5) / dens + lean * tt * tt * bladeH * 0.8;
-            float wdt = (1.0 - tt) * 0.45 / dens;
-            grass = max(grass, step(abs(p.x - cx), wdt));
-        }
-    }
-    float shoreMask = max(ground, grass);
-    if (shoreMask > 0.0) {
-        vec3 soil = mix(bgColor.rgb * 0.30, mutedColor.rgb * 0.30, 0.35) + gSkyLow * 0.04;
-        soil *= 0.8 + 0.4 * fbm3(p * vec2(40.0, 90.0));
-        // Rim light from the sky on the top of the bank.
-        float rim = exp(-(p.y - shoreY) * 90.0) * ground;
-        soil += gSkyLow * rim * 0.25 + gDusk * gTwilight * rim * 0.2;
+    // ---- the meadow on the near shore ----
+    // Six bands of grass from the waterline to the bottom edge: far bands are
+    // fine, short and hazed; near ones are tall, coarse and soft-edged (out of
+    // focus). Gusts roll across as waves of lean; flowers on warm days, reeds
+    // at the water, and snow burying it all in winter.
+    if (p.y > shoreY - 0.14) {
         float snowG = clamp(wxSnow * 1.2 + gCold * 0.3 - 0.15, 0.0, 1.0);
-        soil = mix(soil, mix(fgColor.rgb, gSkyLow, 0.35) * (0.35 + 0.55 * gDaylight), snowG * ground * (0.7 + 0.3 * fbm3(p * 30.0)));
-        col = mix(col, soil, shoreMask);
+        vec3 grassCol = mix(mutedColor.rgb, accentColor.rgb, 0.55);
+        vec3 airCol = mix(gSkyLow, gSkyTop, 0.3);
+        float bodyStr = gIsDay ? gDaylight * (1.0 - gGloom * 0.7) : 0.2 * (1.0 - gGloom);
+        // Low sun behind the grass shines through the blades.
+        float backlight = gTwilight * (1.0 - gGloom) + (gIsDay ? 0.25 * gDaylight : 0.0);
+        bool warm = wxTemp > 8.0 && wxSnow < 0.05;
+
+        for (int l = 0; l < 6; l++) {
+            float fl = float(l) / 5.0;
+            float yl = shoreY + (0.535 - shoreY) * pow(fl, 1.5);
+            float dens = mix(620.0, 60.0, pow(fl, 0.65));
+            float hMax = mix(0.010, 0.10, pow(fl, 1.35)) * (1.0 - snowG * 0.65);
+            float haze = (1.0 - fl) * 0.30;
+            float aa = 0.0006 * (1.0 + fl * fl * 5.0);
+
+            // The ground of this band.
+            if (p.y >= yl) {
+                vec3 soil = mix(bgColor.rgb * 0.28, grassCol * 0.22, 0.5) * (0.75 + 0.5 * fbm3(p * vec2(50.0, 110.0)));
+                soil += gSkyLow * 0.04;
+                soil = mix(soil, mix(fgColor.rgb, gSkyLow, 0.35) * (0.35 + 0.55 * gDaylight) * (0.85 + 0.15 * fbm3(p * 40.0)), snowG);
+                col = mix(soil, airCol * 0.5, haze);
+            }
+
+            // Blades rooted along this band.
+            float cell0 = floor(p.x * dens);
+            for (int kk = -1; kk <= 1; kk++) {
+                float cell = cell0 + float(kk);
+                float seedB = cell * 1.37 + float(l) * 31.7;
+                float h = hash1(seedB);
+                float clump = vnoise(vec2(cell * 0.09, float(l) * 5.0));
+                float bh = hMax * (0.30 + 0.70 * hash1(seedB + 2.1)) * (0.55 + 0.9 * clump);
+                if (l <= 1 && hash1(seedB + 9.0) > 0.94) bh *= 3.2;       // reeds by the water
+                float root = (cell + hash1(seedB + 5.3)) / dens;
+                float t = (yl + 0.003 - p.y) / bh;
+                if (t < 0.0 || t > 1.0) continue;
+                float gust = fbm3(vec2(root * 0.8 - time * (0.22 + wxWind * 0.8), float(l) * 2.0));
+                float lean = (0.10 + wxWind * 1.0) * (0.35 + gust * 1.1)
+                           + (h - 0.5) * 0.35
+                           + sin(time * (1.4 + h) + root * 9.0) * 0.04 * (0.3 + wxWind);
+                float bx = root + lean * bh * t * t * 1.2;
+                float w = pow(1.0 - t, 0.9) * 0.60 / dens;
+                float m = smoothstep(w + aa, max(w - aa * 0.4, 0.0), abs(p.x - bx));
+                if (m <= 0.0) continue;
+                // Each blade its own shade and a slight turn of hue: some dry, some lush.
+                vec3 bh3 = rgb2hsv(grassCol);
+                bh3.x = fract(bh3.x + (hash1(seedB + 7.7) - 0.5) * 0.06);
+                bh3.y *= 0.7 + 0.5 * hash1(seedB + 8.8);
+                vec3 bc = hsv2rgb(bh3) * (0.5 + 0.65 * hash1(seedB + 3.3));
+                // Midrib: blades are lighter down their spine.
+                bc *= 0.85 + 0.25 * smoothstep(w, 0.0, abs(p.x - bx));
+                bc = mix(bc * 0.25, bc, t);
+                bc *= mix(gSkyTop, gSkyLow, 0.5) * 1.3 + gSunLight * bodyStr * 0.7;
+                bc += gSunLight * grassCol * backlight * t * t * 0.9;
+                bc = mix(bc, mix(fgColor.rgb, gSkyLow, 0.35) * (0.4 + 0.5 * gDaylight), snowG * smoothstep(0.4, 1.0, t) * 0.8);
+                bc = mix(bc, airCol * 0.55, haze);
+                col = mix(col, bc, m);
+            }
+
+            // Flowers on warm days, in the middle bands.
+            if (warm && l >= 2 && l <= 4) {
+                float fd = dens * 0.35;
+                float fc = floor(p.x * fd);
+                float fh = hash1(fc * 3.7 + float(l) * 11.0);
+                if (fh > 0.90) {
+                    float fx = (fc + 0.5) / fd;
+                    float stemH = hMax * (0.6 + 0.5 * hash1(fc + float(l)));
+                    float fy = yl - stemH;
+                    float sway = (0.10 + wxWind) * 0.010 * (0.5 + fbm3(vec2(fx * 0.8 - time * 0.3, 1.0)));
+                    float tS = clamp((yl - p.y) / stemH, 0.0, 1.0);
+                    float stemX = fx + sway * tS * tS;
+                    float stem = step(p.y, yl) * step(fy, p.y) * smoothstep(0.0009 * (1.0 + fl * 2.0), 0.0, abs(p.x - stemX));
+                    float r = 0.0016 * (1.0 + fl * 2.2);
+                    vec2 dq = vec2(p.x - fx - sway, (p.y - fy) * 1.4);
+                    // A few petals round a darker eye.
+                    float ang = atan(dq.y, dq.x);
+                    float petals = r * (0.75 + 0.25 * cos(ang * 5.0 + fh * 20.0));
+                    float d = length(dq);
+                    vec3 fcol = hsv2rgb(vec3(fract(gAccHsv.x + (hash1(fc * 9.1) - 0.5) * 0.45 + 0.5),
+                                             0.38, 0.80)) * (0.35 + 0.55 * (gDaylight + gTwilight * 0.5));
+                    vec3 stemCol = grassCol * 0.35 * (mix(gSkyTop, gSkyLow, 0.5) * 1.3);
+                    col = mix(col, mix(stemCol, airCol * 0.55, haze), stem);
+                    float head = smoothstep(petals, petals * 0.7, d);
+                    vec3 fc3 = mix(fcol, fcol * 0.35, smoothstep(r * 0.35, 0.0, d));
+                    col = mix(col, mix(fc3, airCol * 0.55, haze), head);
+                }
+            }
+        }
     }
 
     // ---- fireflies on warm, calm nights ----
@@ -713,19 +858,25 @@ void main() {
     col = mix(col, snowCol * (0.55 + 0.45 * gDaylight), snowCap * 0.9);
 
     // ---- framing spruces ----
-    float tierA, tierB, tierC, tierD;
-    float sA1 = spruce(p, -gHalfW + 0.10, -0.34, 0.20, 1.0, tierA);
-    float sA2 = spruce(p, -gHalfW + 0.36, -0.06, 0.12, 2.0, tierB);
-    float sB1 = spruce(p, gHalfW - 0.14, -0.40, 0.22, 3.0, tierC);
-    float sB2 = spruce(p, gHalfW - 0.42, 0.02, 0.10, 4.0, tierD);
+    float snA, snB, snC, snD, egA, egB, egC, egD;
+    float sA1 = spruce(p, -gHalfW + 0.10, -0.34, 0.20, 1.0, snA, egA);
+    float sA2 = spruce(p, -gHalfW + 0.36, -0.06, 0.12, 2.0, snB, egB);
+    float sB1 = spruce(p, gHalfW - 0.14, -0.40, 0.22, 3.0, snC, egC);
+    float sB2 = spruce(p, gHalfW - 0.42, 0.02, 0.10, 4.0, snD, egD);
     float trees = max(max(sA1, sA2), max(sB1, sB2));
     if (trees > 0.0) {
-        vec3 bark = mix(bgColor.rgb * 0.12, mutedColor.rgb * 0.10, 0.3);
-        // Sky light on the needle tips.
-        bark += gSkyLow * 0.05 + gDusk * gTwilight * 0.04;
-        float tierTop = max(max(tierA * sA1, tierB * sA2), max(tierC * sB1, tierD * sB2));
+        vec3 bark = mix(bgColor.rgb * 0.12, mix(mutedColor.rgb, accentColor.rgb, 0.3) * 0.12, 0.4);
+        bark *= 0.8 + 0.4 * vnoise(p * vec2(300.0, 500.0));
+        bark += gSkyLow * 0.04 + gDusk * gTwilight * 0.03;
+        // Rim light on the outline: sky all round, the sun or moon on its side.
+        float edge = max(max(abs(egA), abs(egB)), max(abs(egC), abs(egD)));
+        float edgeS = egA + egB + egC + egD;
+        float toward = clamp(sign(edgeS) * sign(gBody.x - p.x), 0.0, 1.0);
+        float bodyStr = gIsDay ? gDaylight * (1.0 - gGloom * 0.7) : 0.3 * (1.0 - gGloom);
+        bark += gSkyLow * edge * 0.10 + gSunLight * edge * toward * 0.35 * bodyStr;
+        float snowTop = max(max(snA, snB), max(snC, snD));
         float snowT = clamp(wxSnow * 1.3 + gCold * 0.2 - 0.1, 0.0, 1.0);
-        bark = mix(bark, mix(fgColor.rgb, gSkyLow, 0.4) * (0.35 + 0.5 * gDaylight), tierTop * snowT * 0.85);
+        bark = mix(bark, mix(fgColor.rgb, gSkyLow, 0.4) * (0.35 + 0.5 * gDaylight), snowTop * snowT * 0.9);
         col = mix(col, bark, trees);
     }
 

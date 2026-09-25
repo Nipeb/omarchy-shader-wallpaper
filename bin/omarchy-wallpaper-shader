@@ -18,6 +18,10 @@ current_enabled() {
   cat "$STATE_DIR/enabled" 2>/dev/null || echo "0"
 }
 
+current_testing() {
+  cat "$STATE_DIR/testing" 2>/dev/null || echo "0"
+}
+
 current_audio() {
   cat "$STATE_DIR/audio" 2>/dev/null || echo "1"
 }
@@ -96,19 +100,36 @@ audio)
   *) echo "Usage: omarchy-wallpaper-shader audio <on|off|toggle>" >&2; exit 1 ;;
   esac
   ;;
+testing|--testing)
+  # --testing on its own shows the weather test panel.
+  arg="${2:-}"
+  [[ $1 == --testing && -z $arg ]] && arg=on
+  case "$arg" in
+  on) echo "1" > "$STATE_DIR/testing"; omarchy-shell -q wallpaperShader enableTesting >/dev/null 2>&1 || true ;;
+  off) echo "0" > "$STATE_DIR/testing"; omarchy-shell -q wallpaperShader disableTesting >/dev/null 2>&1 || true ;;
+  toggle|"")
+    if [[ $(current_testing) == "1" ]]; then echo "0" > "$STATE_DIR/testing"; else echo "1" > "$STATE_DIR/testing"; fi
+    omarchy-shell -q wallpaperShader toggleTesting >/dev/null 2>&1 || true
+    ;;
+  *) echo "Usage: omarchy-wallpaper-shader testing <on|off|toggle>" >&2; exit 1 ;;
+  esac
+  ;;
 current)
-  echo "enabled=$(current_enabled) shader=$(current_shader) audio=$(current_audio)"
+  echo "enabled=$(current_enabled) shader=$(current_shader) audio=$(current_audio) testing=$(current_testing)"
   ;;
 *)
   cat >&2 <<USAGE
-Usage: omarchy-wallpaper-shader <on|off|toggle|next|prev|set <name>|list|audio <on|off|toggle>|current>
+Usage: omarchy-wallpaper-shader <on|off|toggle|next|prev|set <name>|list|audio <on|off|toggle>|testing <on|off|toggle>|--testing|current>
 
   on|off|toggle       Switch the animated shader wallpaper on or off
   next|prev           Cycle to the next/previous shader style (also turns it on)
   set <name>          Jump to a specific style (also turns it on)
   list                List available shader styles
   audio <on|off|toggle>  Switch audio reactivity on or off (default: on)
-  current             Show the active style, on/off, and audio state
+  testing <on|off|toggle>  Weather test panel: buttons bottom right to try every
+                      condition, time of day, wind and temperature live
+  --testing           Same as: testing on
+  current             Show the active style, on/off, audio and testing state
 USAGE
   exit 1
   ;;

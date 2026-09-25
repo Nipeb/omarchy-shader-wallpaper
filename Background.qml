@@ -98,6 +98,14 @@ Item {
   property int iconVersion: 0
 
   property bool audioEnabled: true
+  // Weather test panel (omarchy-wallpaper-shader --testing): live overrides
+  // that sit above the config's preview keys and the real forecast. -1 (and
+  // -999 for temperature) means "not overridden".
+  property bool testingEnabled: false
+  property real testCode: -1
+  property real testPhase: -1
+  property real testWind: -1
+  property real testTemp: -999
   property real audioLevel: 0
   property real audioPeak: 0
   property real audioBass: 0
@@ -178,8 +186,9 @@ Item {
   }
 
   function recomputeWeather() {
-    var preview = cfgWeatherPreviewCode >= 0
-    var code = preview ? cfgWeatherPreviewCode : (wxOk ? wxCodeLive : 2)
+    var previewCode = testCode >= 0 ? testCode : cfgWeatherPreviewCode
+    var preview = previewCode >= 0
+    var code = preview ? previewCode : (wxOk ? wxCodeLive : 2)
     var pr = wmoProfile(code)
     wxCloudN = (!preview && wxOk && wxCloudLive >= 0) ? Math.max(0, Math.min(1, wxCloudLive / 100)) : pr.cloud
     var fromPrecip = (!preview && wxOk) ? Math.min(1, wxPrecipLive / 4) : 0
@@ -188,7 +197,11 @@ Item {
     wxFogN = pr.fog
     wxStormN = pr.storm
     wxWindN = (!preview && wxOk) ? Math.max(0, Math.min(1, wxWindLive / 60)) : (pr.storm > 0 ? 0.6 : 0.25)
+    if (testWind >= 0) wxWindN = testWind
     wxTempN = wxOk ? wxTempLive : 10
+    // A snow preview on a warm day would melt as it lands; make it winter.
+    if (preview && pr.snow > 0 && wxTempN > 0) wxTempN = -4
+    if (testTemp > -900) wxTempN = testTemp
     updateSunPhase()
   }
 
@@ -196,8 +209,9 @@ Item {
   // plain 06:30-19:30 day from the local clock stands in.
   function updateSunPhase() {
     var now = Date.now() / 1000
-    if (cfgWeatherPreviewPhase >= 0) {
-      wxSunPhase = Math.min(1.999, cfgWeatherPreviewPhase)
+    var previewPhase = testPhase >= 0 ? testPhase : cfgWeatherPreviewPhase
+    if (previewPhase >= 0) {
+      wxSunPhase = Math.min(1.999, previewPhase)
     } else {
       var rise = wxSunrise, set = wxSunset, riseNext = wxSunriseNext
       if (!wxOk || !rise || !set) {
@@ -215,6 +229,26 @@ Item {
     var synodic = 29.530588853 * 86400
     var ph2 = ((now - 947182440) / synodic) % 1
     wxMoonPhase = ph2 < 0 ? ph2 + 1 : ph2
+  }
+
+  function setTesting(on) {
+    testingEnabled = on
+    if (!on) { testCode = -1; testPhase = -1; testWind = -1; testTemp = -999 }
+    recomputeWeather()
+  }
+
+  // The panel's Close button: also clears the persisted flag.
+  function closeTesting() {
+    setTesting(false)
+    Quickshell.execDetached(["bash", "-c", "echo 0 > '" + shaderStateDir + "/testing'"])
+  }
+
+  function setTest(kind, value) {
+    if (kind === "code") testCode = value
+    else if (kind === "phase") testPhase = value
+    else if (kind === "wind") testWind = value
+    else if (kind === "temp") testTemp = value
+    recomputeWeather()
   }
 
   function refreshWeather() {
@@ -380,20 +414,23 @@ Item {
     command: ["bash", "-c",
       "echo \"E=$(cat '" + root.shaderStateDir + "/enabled' 2>/dev/null)\"; " +
       "echo \"N=$(cat '" + root.shaderStateDir + "/shader' 2>/dev/null)\"; " +
-      "echo \"A=$(cat '" + root.shaderStateDir + "/audio' 2>/dev/null)\""]
+      "echo \"A=$(cat '" + root.shaderStateDir + "/audio' 2>/dev/null)\"; " +
+      "echo \"T=$(cat '" + root.shaderStateDir + "/testing' 2>/dev/null)\""]
     stdout: StdioCollector {
       onStreamFinished: {
         var lines = String(text || "").split("\n")
-        var enabled = "", name = "", audio = ""
+        var enabled = "", name = "", audio = "", testing = ""
         for (var i = 0; i < lines.length; i++) {
           var line = lines[i]
           if (line.indexOf("E=") === 0) enabled = line.slice(2).trim()
           else if (line.indexOf("N=") === 0) name = line.slice(2).trim()
           else if (line.indexOf("A=") === 0) audio = line.slice(2).trim()
+          else if (line.indexOf("T=") === 0) testing = line.slice(2).trim()
         }
         root.shaderEnabled = (enabled === "1")
         if (name) root.setShaderName(name)
         if (audio) root.audioEnabled = (audio === "1")
+        root.testingEnabled = (testing === "1")
         root.updateAudioProc()
       }
     }
@@ -552,6 +589,18 @@ Item {
 
     function refreshWeather(): void {
       root.refreshWeather()
+    }
+
+    function enableTesting(): void {
+      root.setTesting(true)
+    }
+
+    function disableTesting(): void {
+      root.setTesting(false)
+    }
+
+    function toggleTesting(): void {
+      root.setTesting(!root.testingEnabled)
     }
 
     function audioStatus(): string {
@@ -995,6 +1044,149 @@ Item {
           if (mouse.button === Qt.RightButton) root.openThemeSwitcher()
           else root.openSelector()
           mouse.accepted = true
+        }
+      }
+
+      // Weather test panel: only with --testing, only on the weather style.
+      Rectangle {
+        id: testPanel
+        visible: root.testingEnabled && root.shaderEnabled && root.shaderName === "weather"
+        anchors { right: parent.right; bottom: parent.bottom; rightMargin: 24; bottomMargin: 24 }
+        width: testColumn.implicitWidth + 20
+        height: testColumn.implicitHeight + 20
+        radius: 8
+        color: Qt.rgba(Color.background.r, Color.background.g, Color.background.b, 0.82)
+        border.width: 1
+        border.color: Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.5)
+
+        // Swallow clicks so they never reach the desktop's double-click.
+        MouseArea { anchors.fill: parent }
+
+        Column {
+          id: testColumn
+          anchors.centerIn: parent
+          spacing: 6
+
+          Row {
+            spacing: 8
+            Text {
+              text: "weather test"
+              color: Color.accent
+              font.pixelSize: 12
+              font.bold: true
+            }
+            Text {
+              function f(v) { return Number(v).toFixed(2) }
+              text: "sun " + f(root.wxSunPhase) + "  cloud " + f(root.wxCloudN) + "  rain " + f(root.wxRainN)
+                  + "  snow " + f(root.wxSnowN) + "  wind " + f(root.wxWindN) + "  " + Math.round(root.wxTempN) + "°"
+              color: Color.foreground
+              opacity: 0.7
+              font.pixelSize: 11
+              anchors.verticalCenter: parent.verticalCenter
+            }
+          }
+
+          Repeater {
+            model: [
+              { kind: "code", items: [["Live", -1], ["Clear", 0], ["Partly", 2], ["Overcast", 3], ["Fog", 45], ["Drizzle", 53],
+                                      ["Rain", 63], ["Downpour", 65], ["Snow", 73], ["Blizzard", 75], ["Storm", 95]] },
+              { kind: "phase", items: [["Live", -1], ["Sunrise", 0.03], ["Morning", 0.2], ["Noon", 0.5], ["Afternoon", 0.75],
+                                       ["Sunset", 0.97], ["Dusk", 1.04], ["Night", 1.5], ["Pre-dawn", 1.95]] },
+              { kind: "wind", items: [["Live", -1], ["Calm", 0.0], ["Breeze", 0.25], ["Windy", 0.55], ["Gale", 0.95]] },
+              { kind: "temp", items: [["Live", -999], ["-15°", -15], ["-3°", -3], ["5°", 5], ["14°", 14], ["24°", 24]] }
+            ]
+
+            Row {
+              id: testRow
+              required property var modelData
+              spacing: 4
+
+              Text {
+                text: modelData.kind
+                width: 42
+                color: Color.foreground
+                opacity: 0.55
+                font.pixelSize: 11
+                anchors.verticalCenter: parent.verticalCenter
+              }
+
+              Repeater {
+                model: modelData.items
+
+                Rectangle {
+                  required property var modelData
+                  property string kind: testRow.modelData.kind
+                  property real current: kind === "code" ? root.testCode : kind === "phase" ? root.testPhase
+                                       : kind === "wind" ? root.testWind : root.testTemp
+                  property bool active: Math.abs(current - modelData[1]) < 0.001
+                  width: label.implicitWidth + 14
+                  height: 22
+                  radius: 5
+                  color: active ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.35)
+                                : (hover.containsMouse ? Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.10) : "transparent")
+                  border.width: 1
+                  border.color: active ? Color.accent : Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.18)
+
+                  Text {
+                    id: label
+                    anchors.centerIn: parent
+                    text: modelData[0]
+                    color: Color.foreground
+                    font.pixelSize: 11
+                  }
+
+                  MouseArea {
+                    id: hover
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    onClicked: root.setTest(parent.kind, modelData[1])
+                  }
+                }
+              }
+            }
+          }
+
+          Row {
+            spacing: 4
+            Text { text: "time"; width: 42; color: Color.foreground; opacity: 0.55; font.pixelSize: 11; anchors.verticalCenter: parent.verticalCenter }
+            Repeater {
+              // Skip ahead on the shader clock -- aurora nights, bird flights and
+              // shooting stars run on their own slow clocks.
+              model: [["+1 min", 60], ["+5 min", 300], ["+30 min", 1800]]
+              Rectangle {
+                required property var modelData
+                width: skipLabel.implicitWidth + 14
+                height: 22
+                radius: 5
+                color: skipHover.containsMouse ? Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.10) : "transparent"
+                border.width: 1
+                border.color: Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.18)
+                Text { id: skipLabel; anchors.centerIn: parent; text: modelData[0]; color: Color.foreground; font.pixelSize: 11 }
+                MouseArea {
+                  id: skipHover
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  onClicked: root.shaderTime += modelData[1]
+                }
+              }
+            }
+            Item { width: 12; height: 1 }
+            Rectangle {
+              width: closeLabel.implicitWidth + 14
+              height: 22
+              radius: 5
+              color: closeHover.containsMouse ? Qt.rgba(Color.urgent.r, Color.urgent.g, Color.urgent.b, 0.25) : "transparent"
+              border.width: 1
+              border.color: Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.18)
+              Text { id: closeLabel; anchors.centerIn: parent; text: "Close"; color: Color.foreground; font.pixelSize: 11 }
+              MouseArea {
+                id: closeHover
+                anchors.fill: parent
+                hoverEnabled: true
+                onClicked: root.closeTesting()
+              }
+            }
+          }
         }
       }
     }
