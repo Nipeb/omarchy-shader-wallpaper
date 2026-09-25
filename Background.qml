@@ -107,6 +107,11 @@ Item {
   property real testWind: -1
   property real testTemp: -999
   property real testSeason: -1
+  // Easter eggs forced on from the test panel (they also happen by themselves).
+  property bool eggCampfire: false
+  property bool eggHikers: false
+  property bool eggAurora: false
+  property bool eggBirds: false
   // Fraction of the year (0 = 1 Jan), for seasonal grass and leaves.
   property real wxSeason: 0.5
   property real audioLevel: 0
@@ -190,9 +195,9 @@ Item {
     else if (c === 45 || c === 48) { pr.cloud = 0.8; pr.fog = c === 48 ? 0.9 : 0.7 }
     else if (c >= 51 && c <= 57) { pr.cloud = 0.9; pr.rain = c <= 51 ? 0.15 : c <= 53 ? 0.22 : 0.30 }
     else if (c >= 61 && c <= 67) { pr.cloud = 0.95; pr.rain = (c === 61 || c === 66) ? 0.38 : (c === 63) ? 0.58 : 1.0 }
-    else if (c >= 71 && c <= 77) { pr.cloud = 0.95; pr.snow = c === 71 ? 0.4 : c === 73 ? 0.7 : c === 75 ? 1.0 : 0.35 }
+    else if (c >= 71 && c <= 77) { pr.cloud = 0.95; pr.snow = c === 71 ? 0.30 : c === 73 ? 0.55 : c === 75 ? 1.0 : 0.30 }
     else if (c >= 80 && c <= 82) { pr.cloud = 0.8; pr.rain = c === 80 ? 0.40 : c === 81 ? 0.65 : 1.0 }
-    else if (c === 85 || c === 86) { pr.cloud = 0.85; pr.snow = c === 85 ? 0.55 : 0.9 }
+    else if (c === 85 || c === 86) { pr.cloud = 0.85; pr.snow = c === 85 ? 0.45 : 0.9 }
     else if (c >= 95) { pr.cloud = 1.0; pr.rain = 0.85; pr.storm = c === 95 ? 0.7 : 1.0 }
     return pr
   }
@@ -257,7 +262,8 @@ Item {
 
   function setTesting(on) {
     testingEnabled = on
-    if (!on) { testCode = -1; testPhase = -1; testWind = -1; testTemp = -999; testSeason = -1; testWindDir = -999 }
+    if (!on) { testCode = -1; testPhase = -1; testWind = -1; testTemp = -999; testSeason = -1; testWindDir = -999
+      eggCampfire = false; eggHikers = false; eggAurora = false; eggBirds = false }
     recomputeWeather()
   }
 
@@ -267,6 +273,12 @@ Item {
     Quickshell.execDetached(["bash", "-c", "echo 0 > '" + shaderStateDir + "/testing'"])
   }
 
+  // For the panel: an egg button shows active when its flag is on.
+  function eggActive(n) {
+    var on = n === 1 ? eggCampfire : n === 2 ? eggHikers : n === 3 ? eggAurora : eggBirds
+    return on ? n : -1
+  }
+
   function setTest(kind, value) {
     if (kind === "code") testCode = value
     else if (kind === "phase") testPhase = value
@@ -274,6 +286,13 @@ Item {
     else if (kind === "temp") testTemp = value
     else if (kind === "season") testSeason = value
     else if (kind === "dir") testWindDir = value
+    else if (kind === "eggs") {
+      if (value === 1) eggCampfire = !eggCampfire
+      else if (value === 2) eggHikers = !eggHikers
+      else if (value === 3) eggAurora = !eggAurora
+      else if (value === 4) eggBirds = !eggBirds
+      return
+    }
     recomputeWeather()
   }
 
@@ -926,6 +945,10 @@ Item {
         property real season: root.wxSeason
         property real windSide: root.wxWindDirN
         property real windTravel: root.windTravel
+        property real eggCampfire: root.eggCampfire ? 1 : 0
+        property real eggHikers: root.eggHikers ? 1 : 0
+        property real eggAurora: root.eggAurora ? 1 : 0
+        property real eggBirds: root.eggBirds ? 1 : 0
         property real flashTime: root.flashTime
         property real iconWarpScale: root.cfgIconWarpScale
         property real edgeGlowWidth: root.cfgEdgeGlowWidth
@@ -1127,7 +1150,8 @@ Item {
               { kind: "wind", items: [["Live", -1], ["Calm", 0.0], ["Breeze", 0.25], ["Windy", 0.55], ["Gale", 0.95]] },
               { kind: "dir", items: [["Live", -999], ["→ from west", 1], ["← from east", -1], ["↘ from NW", 0.5]] },
               { kind: "temp", items: [["Live", -999], ["-15°", -15], ["-3°", -3], ["5°", 5], ["14°", 14], ["24°", 24]] },
-              { kind: "season", items: [["Live", -1], ["Spring", 0.36], ["Summer", 0.56], ["Autumn", 0.75], ["Late autumn", 0.86], ["Winter", 0.04]] }
+              { kind: "season", items: [["Live", -1], ["Spring", 0.36], ["Summer", 0.56], ["Autumn", 0.75], ["Late autumn", 0.86], ["Winter", 0.04]] },
+              { kind: "eggs", items: [["Campfire", 1], ["Hikers", 2], ["Aurora", 3], ["Birds", 4]] }
             ]
 
             Row {
@@ -1152,7 +1176,8 @@ Item {
                   property string kind: testRow.modelData.kind
                   property real current: kind === "code" ? root.testCode : kind === "phase" ? root.testPhase
                                        : kind === "wind" ? root.testWind : kind === "season" ? root.testSeason
-                                       : kind === "dir" ? root.testWindDir : root.testTemp
+                                       : kind === "dir" ? root.testWindDir
+                                       : kind === "eggs" ? root.eggActive(modelData[1]) : root.testTemp
                   property bool active: Math.abs(current - modelData[1]) < 0.001
                   width: label.implicitWidth + 14
                   height: 22
