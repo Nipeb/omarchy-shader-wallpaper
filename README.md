@@ -8,7 +8,7 @@ that is playing, and is built around an icon of your choosing.
 
 Styles: **aurora** (curtains of light), **thunder** (a storm over the sea),
 **embers**, **nebula** (the logo as a black hole), **ink** (a live dye
-simulation) and **weather** (the sky over your actual
+simulation) and **weather** (a lake landscape under the sky over your actual
 location, right now).
 
 ## Install
