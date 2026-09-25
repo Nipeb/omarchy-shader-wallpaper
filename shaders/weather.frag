@@ -150,7 +150,7 @@ vec2 gBody;
 vec3 gSkyTop, gSkyLow, gDusk, gBodyCol, gSunLight, gAccHsv;
 bool gIsDay;
 // Season and wind, derived once in main().
-float gLeaf, gAutumn, gSpring, gDry, gFallRate, gFlowers, gGrassAmt, gGrassH, gWindS, gWindDir;
+float gLush, gLeaf, gAutumn, gSpring, gDry, gFallRate, gFlowers, gGrassAmt, gGrassH, gWindS, gWindDir;
 vec3 gGrassCol, gFoliage;
 
 // ---------------------------------------------------------------- clouds ---
@@ -212,6 +212,28 @@ float nearRidge(float x, float py) {
     return inTree > 0.5 ? top : base;
 }
 
+// Hue blend along the short way round the wheel.
+float hueMix(float a, float b, float t) {
+    float d = b - a;
+    d -= floor(d + 0.5);
+    return fract(a + d * t);
+}
+
+// A plant colour through the year: fresher and yellower in spring, turning
+// toward `autumnHue` in autumn, cured to straw and brown when dead.
+vec3 seasonTint(vec3 c, float autumnHue, float dead) {
+    vec3 h = rgb2hsv(c);
+    h.x = hueMix(h.x, 0.24, gSpring * 0.35);
+    h.z *= 1.0 + gSpring * 0.25;
+    h.x = hueMix(h.x, autumnHue, gAutumn);
+    h.y = mix(h.y, max(h.y, 0.62), gAutumn * 0.8);
+    h.z *= 1.0 + gAutumn * 0.15;
+    h.x = hueMix(h.x, 0.09, dead);
+    h.y = mix(h.y, 0.32, dead);
+    h.z *= 1.0 - dead * 0.25;
+    return hsv2rgb(clamp(h, 0.0, 1.0));
+}
+
 // Crag relief: ridged noise whose octaves are each rotated, so no layer
 // lines up with the screen axes and nothing reads as stripes.
 float crag(vec2 q) {
@@ -229,6 +251,68 @@ float crag(vec2 q) {
 float faceHeight(vec2 p, float seed) {
     vec2 w = vec2(fbm3(p * vec2(5.0, 9.0) + seed), fbm3(p * vec2(5.0, 9.0) + seed + 4.3)) - 0.5;
     return crag(vec2(p.x * 15.0, p.y * 24.0) + w * 1.7 + seed);
+}
+
+// One background tree: a conifer (tiered, jagged spire) or a broadleaf
+// (round, lumpy crown on a short trunk). `t` returns height along the
+// tree (0 base, 1 top) and `side` which flank the pixel is on.
+float bgTree(vec2 p, float cx, float baseY, float h, float kind, float seed, out float t, out float side) {
+    t = (baseY - p.y) / h;
+    side = sign(p.x - cx);
+    if (t < -0.05 || t > 1.05 || abs(p.x - cx) > h * 0.45) return 0.0;
+    float aa = 0.0006;
+    if (kind < 0.5) {
+        // Conifer: tiers make the edge a saw, needle fringe roughens it.
+        float saw = fract(t * (5.0 + 3.0 * hash1(seed)) + hash1(seed * 2.0));
+        float w = h * 0.26 * pow(max(1.0 - t, 0.0), 0.95) * (0.62 + 0.38 * saw);
+        w *= 0.85 + 0.3 * vnoise(vec2(p.y * 900.0, seed));
+        float trunk = step(t, 0.10) * step(abs(p.x - cx), h * 0.025);
+        return max(smoothstep(w + aa, w - aa, abs(p.x - cx)), trunk);
+    }
+    // Broadleaf: a lumpy crown over a short trunk; a twig haze when bare.
+    vec2 c = vec2(cx, baseY - h * 0.60);
+    vec2 d = (p - c) / vec2(h * 0.30, h * 0.40);
+    float lump = (fbm3(p * 260.0 + seed) - 0.5) * 0.55;
+    float crown = smoothstep(1.08, 0.92, length(d) + lump) * (0.35 + 0.65 * gLeaf);
+    float trunk = step(t, 0.30) * step(abs(p.x - cx), h * 0.03);
+    float twigs = smoothstep(1.0, 0.7, length(d)) * (1.0 - gLeaf) * step(0.45, vnoise(p * vec2(900.0, 500.0) + seed)) * 0.6;
+    return max(max(crown, trunk), twigs);
+}
+
+// Colour of a background tree at depth `haze` (0 near .. 1 lost in air).
+vec3 bgTreeCol(float kind, float t, float side, float seed, float haze, float cx) {
+    vec3 skyAmb = mix(gSkyTop, gSkyLow, 0.5);
+    float bodyStr = gIsDay ? gDaylight * (1.0 - gGloom * 0.7) : 0.2 * (1.0 - gGloom);
+    float lit = clamp(0.5 + 0.5 * side * sign(gBody.x - cx), 0.0, 1.0) * bodyStr;
+    vec3 c;
+    if (kind < 0.5) {
+        c = mix(gFoliage * vec3(0.50, 0.66, 0.62), bgColor.rgb, 0.35) * (0.75 + 0.4 * hash1(seed));
+    } else {
+        c = seasonTint(mix(gFoliage, bgColor.rgb, 0.25) * (0.75 + 0.4 * hash1(seed)), hash1(seed * 3.0) > 0.5 ? 0.12 : 0.05, 0.0);
+        c = mix(c, mix(bgColor.rgb, mutedColor.rgb, 0.4) * 0.8, 1.0 - gLeaf);
+    }
+    c *= skyAmb * (0.65 + 0.35 * t) * 0.85 + gSunLight * lit * 0.25;
+    float snowT = clamp(wxSnow * 1.2 + gCold * 0.35 - 0.1, 0.0, 1.0);
+    c = mix(c, mix(fgColor.rgb, gSkyLow, 0.35) * (0.45 + 0.4 * gDaylight), snowT * smoothstep(0.3, 0.9, t) * 0.6);
+    return mix(c, mix(gSkyLow, gSkyTop, 0.25), haze);
+}
+
+// Forest texture on a mountainside: a carpet of small spires in staggered
+// rows, their sunward flanks lit, so a slope reads as trees.
+float slopeTrees(vec2 p, float scale, float seed, out float shade) {
+    vec2 g = p * vec2(260.0, 150.0) / scale;
+    float row = floor(g.y);
+    g.x += mod(row, 2.0) * 0.5;
+    vec2 id = floor(g);
+    vec2 f = fract(g);
+    float hh = hash21(id + seed);
+    float x = f.x - 0.5 - (hh - 0.5) * 0.3;
+    float y = 1.0 - f.y;
+    float tip = 0.75 + 0.45 * hh;
+    float w = max(tip - y, 0.0) * 0.50;
+    float m = smoothstep(w + 0.06, w - 0.06, abs(x)) * step(y, tip);
+    shade = 0.5 + 0.5 * sign(x) * sign(gBody.x - p.x);
+    return m;
 }
 
 // One mountain range: rock lit through real surface normals, ledges, forest
@@ -270,12 +354,18 @@ vec3 shadeRange(vec2 p, float ridgeY, float slope, float depth, vec3 rock, float
     c *= 0.88 + 0.24 * fbm3(p * vec2(90.0, 140.0) + seed);
 
     // Forest on the lower slopes, thinning out upward.
-    float treeAlt = 0.035 + 0.035 * fbm3(vec2(p.x * 3.0 + seed, 2.0)) - depth * 0.02;
-    float forest = smoothstep(treeAlt + 0.004, treeAlt - 0.010, alt) * smoothstep(-0.2, 0.25, n.y);
-    float crowns = smoothstep(0.3, 0.8, vnoise(p * vec2(520.0, 380.0) + seed));
-    vec3 forestCol = mix(bgColor.rgb * 0.55, mix(mutedColor.rgb, accentColor.rgb, 0.35) * 0.6, 0.5);
-    forestCol *= (0.55 + 0.45 * crowns) * (skyTint * 1.1 * ambient + gSunLight * direct * 0.9);
-    c = mix(c, forestCol, forest * 0.9);
+    float treeAlt = 0.075 + 0.05 * fbm3(vec2(p.x * 3.0 + seed, 2.0)) - depth * 0.03;
+    float tShade;
+    float spires = slopeTrees(p, 1.0 + depth * 1.5, seed, tShade);
+    // A ragged treeline: tips poke above the forest's edge.
+    float forest = smoothstep(treeAlt + 0.004, treeAlt - 0.010, alt - spires * 0.006) * smoothstep(-0.2, 0.25, n.y);
+    vec3 forestCol = mix(bgColor.rgb * 0.50, gFoliage * vec3(0.55, 0.72, 0.68), 0.55);
+    // Birch stands through the conifers, gold in autumn, grey when bare.
+    float decid = smoothstep(0.55, 0.75, fbm3(p * vec2(40.0, 25.0) + seed));
+    forestCol = mix(forestCol, seasonTint(gFoliage * 0.8, 0.12, 0.0), decid * 0.6 * gLeaf);
+    forestCol *= (0.45 + 0.55 * mix(0.35, 1.0, spires) * (0.7 + 0.3 * tShade))
+               * (skyTint * 1.1 * ambient + gSunLight * direct * 0.9);
+    c = mix(c, forestCol, forest * 0.92);
 
     // Snow: temperature sets the line; hollows and gentle faces hold it lower.
     float coldness = clamp(gCold + wxSnow * 0.8, 0.0, 1.0);
@@ -454,17 +544,41 @@ vec3 skyAt(vec2 p, bool refl) {
                    * (0.5 + 0.8 * fbm3(vec2(p.x * 3.0 + time * 0.011, p.y * 30.0 + 4.0)));
     col = mix(col, fogCol, clamp(fogBand2 * haze * 1.1, 0.0, 0.85));
 
-    float nr = nearRidge(p.x, p.y);
-    float cNear = smoothstep(nr - SKY_AA * 0.6, nr + SKY_AA * 0.6, p.y);
-    if (cNear > 0.0) {
-        // A dark wall of forest: individual crowns, their tops catching sky.
-        float crowns = vnoise(p * vec2(640.0, 420.0));
-        float topLight = exp(-(p.y - nr) / 0.004);
-        vec3 forest = mix(bgColor.rgb * 0.40, mix(mutedColor.rgb, accentColor.rgb, 0.3) * 0.40, 0.45);
-        forest *= 0.65 + 0.55 * crowns;
-        forest += gSkyLow * topLight * 0.10 + gSunLight * topLight * 0.10 * gDaylight * (1.0 - gGloom);
-        forest = mix(forest, mix(fgColor.rgb, gSkyLow, 0.4) * 0.6 * (0.7 + 0.3 * crowns), wxSnow * 0.55 + gCold * 0.25);
-        col = mix(col, mix(forest, mix(gSkyLow, gSkyTop, 0.25), 0.16), cNear);
+    // ---- the forested hills across the lake ----
+    // Rows of individual trees from the hill crest down to the water, each
+    // row nearer, larger and less hazed than the one behind, over a dark
+    // forest floor -- a forest with depth, not a fringe on the shore.
+    {
+        float hillTop = WL - 0.010 - 0.050 * fbm3(vec2(p.x * 1.6 + 5.0, 2.0)) - 0.02 * vnoise(vec2(p.x * 0.7, 7.0));
+        if (p.y > hillTop - 0.045) {
+            for (int r = 0; r < 5; r++) {
+                float fr2 = float(r) / 4.0;
+                float h = mix(0.014, 0.030, fr2);
+                float cellW = h * 0.30;
+                float c0 = floor(p.x / cellW);
+                float rowHaze = mix(0.45, 0.10, fr2) + haze * 0.2;
+                for (int k = -1; k <= 1; k++) {
+                    float cell = c0 + float(k);
+                    float seedT = cell * 3.17 + float(r) * 41.3;
+                    float cx = (cell + 0.5 + (hash1(seedT) - 0.5) * 0.6) * cellW;
+                    float top = WL - 0.010 - 0.050 * fbm3(vec2(cx * 1.6 + 5.0, 2.0)) - 0.02 * vnoise(vec2(cx * 0.7, 7.0));
+                    float baseY = mix(top + 0.006, WL + 0.003, fr2) + (hash1(seedT + 1.0) - 0.5) * 0.004;
+                    if (hash1(seedT + 7.0) < 0.18) continue;                  // clearings
+                    float hT = h * (0.45 + 1.1 * pow(hash1(seedT + 2.0), 1.5));
+                    float kind = hash1(seedT + 3.0) < 0.22 ? 1.0 : 0.0;
+                    if (kind > 0.5) hT *= 0.75;
+                    float tt, sd;
+                    float m = bgTree(p, cx, baseY, hT, kind, seedT, tt, sd);
+                    // Forest floor behind each row keeps the sky from showing through.
+                    float floor_ = step(baseY - hT * 0.25, p.y) * step(abs(p.x - cx), cellW * 0.7);
+                    if (floor_ > 0.0 && m < 0.5) {
+                        vec3 fl = mix(bgColor.rgb * 0.35, gFoliage * 0.25, 0.4) * (mix(gSkyTop, gSkyLow, 0.5) * 1.2);
+                        col = mix(col, mix(fl, mix(gSkyLow, gSkyTop, 0.25), rowHaze), floor_);
+                    }
+                    if (m > 0.0) col = mix(col, bgTreeCol(kind, tt, sd, seedT, rowHaze, cx), m);
+                }
+            }
+        }
     }
 
     // Distant rain shafts under the clouds.
@@ -482,28 +596,6 @@ vec3 skyAt(vec2 p, bool refl) {
 vec2 rot2(vec2 p, float a) {
     float c = cos(a), s = sin(a);
     return vec2(c * p.x - s * p.y, s * p.x + c * p.y);
-}
-
-// Hue blend along the short way round the wheel.
-float hueMix(float a, float b, float t) {
-    float d = b - a;
-    d -= floor(d + 0.5);
-    return fract(a + d * t);
-}
-
-// A plant colour through the year: fresher and yellower in spring, turning
-// toward `autumnHue` in autumn, cured to straw and brown when dead.
-vec3 seasonTint(vec3 c, float autumnHue, float dead) {
-    vec3 h = rgb2hsv(c);
-    h.x = hueMix(h.x, 0.24, gSpring * 0.35);
-    h.z *= 1.0 + gSpring * 0.25;
-    h.x = hueMix(h.x, autumnHue, gAutumn);
-    h.y = mix(h.y, max(h.y, 0.62), gAutumn * 0.8);
-    h.z *= 1.0 + gAutumn * 0.15;
-    h.x = hueMix(h.x, 0.09, dead);
-    h.y = mix(h.y, 0.32, dead);
-    h.z *= 1.0 - dead * 0.25;
-    return hsv2rgb(clamp(h, 0.0, 1.0));
 }
 
 // Distance to a segment, with the position along it.
@@ -883,72 +975,91 @@ vec4 pine(vec2 p, float bx, float topY, float seed) {
     return vec4(col, cov);
 }
 
-// Shrubs on the near meadow: juniper (kind 0, evergreen, blue-green needles,
-// upright) or a deciduous bush (kind 1) that leafs, colours, drops its
-// leaves and shows red berries in autumn. Snow settles on their tops.
+// Shrubs on the near meadow, grown from stems rather than stamped as blobs.
+// Juniper (kind 0): several upright leaders of different heights clumped
+// together, blue-green needles, a narrow, flame-like, uneven outline.
+// Deciduous bush (kind 1): stems fanning out and arching from one root,
+// leaf clusters strung along them, so the outline is lobed and twiggy,
+// with bare stems showing low down and in winter; red berries in autumn.
 vec4 shrub(vec2 p, vec2 base, float w, float h, float kind, float seed) {
-    if (abs(p.x - base.x) > w * 0.75 || p.y < base.y - h * 1.25 || p.y > base.y + 0.02) return vec4(0.0);
-    float hN = clamp((base.y - p.y) / h, 0.0, 1.2);
-    vec2 q = vec2(p.x - treeSway(hN, seed) * 0.35, p.y);
+    if (abs(p.x - base.x) > w * 0.85 || p.y < base.y - h * 1.3 || p.y > base.y + 0.02) return vec4(0.0);
+    float hN = clamp((base.y - p.y) / h, 0.0, 1.3);
+    vec2 q = vec2(p.x - treeSway(hN, seed) * 0.45, p.y);
     vec3 skyAmb = mix(gSkyTop, gSkyLow, 0.5);
     float bodyStr = gIsDay ? gDaylight * (1.0 - gGloom * 0.7) : 0.2 * (1.0 - gGloom);
     vec3 L = normalize(vec3(gBody.x - p.x, p.y - gBody.y, 0.5));
     float snowFall = clamp(wxSnow * 1.3 + gCold * 0.2 - 0.1, 0.0, 1.0);
-
-    float field = 0.0;
-    vec2 grad = vec2(0.0);
-    for (int i = 0; i < 11; i++) {
-        float fi = float(i);
-        float r1 = hash1(fi * 1.7 + seed), r2 = hash1(fi * 3.9 + seed), r3 = hash1(fi * 5.3 + seed);
-        float yy = kind < 0.5 ? r2 : sqrt(r2) * 0.85;
-        float spreadX = kind < 0.5 ? (1.0 - yy * 0.65) : (1.0 - yy * yy * 0.5);
-        vec2 cp = base + vec2((r1 - 0.5) * w * spreadX, -h * (0.18 + 0.70 * yy));
-        vec2 rr = vec2(w, h) * (kind < 0.5 ? vec2(0.20, 0.26) : vec2(0.26, 0.24)) * (0.75 + 0.5 * r3);
-        vec2 dq = (q - cp) / rr;
-        float k = exp(-dot(dq, dq));
-        field += k;
-        grad += k * dq / rr;
-    }
-    float edgeN = (fbm3(q * 60.0 + seed) - 0.5) * 0.7;
-    float level = field + edgeN;
-    float leafy = kind < 0.5 ? 1.0 : gLeaf;
-    float shade;
-    float tex = kind < 0.5 ? needles(q, 0.5 + 0.5 * smoothstep(0.3, 0.8, level), seed, shade)
-                           : leafDots(q, 0.0062, leafy * smoothstep(0.2, 0.6, level), seed, shade);
-    float inner = smoothstep(0.95, 1.4, level) * (kind < 0.5 ? 1.0 : leafy);
-    float mass = max(inner * 0.9 * smoothstep(0.35, 0.6, vnoise(q * 140.0 + seed) + 0.3), tex * smoothstep(0.2, 0.55, level));
+    vec3 stemCol = mix(bgColor.rgb, mutedColor.rgb, 0.3) * 0.45 * skyAmb * 1.3;
 
     vec3 col = vec3(0.0);
     float cov = 0.0;
-    // Bare stems of the deciduous bush, visible when the leaves are gone.
-    if (kind > 0.5 && gLeaf < 0.7) {
-        for (int i = 0; i < 9; i++) {
-            float fi = float(i);
-            vec2 s0 = base + vec2((hash1(fi + seed) - 0.5) * w * 0.25, 0.0);
-            float ang = -1.5708 + (hash1(fi * 3.1 + seed) - 0.5) * 1.9;
-            vec2 s1 = s0 + vec2(cos(ang), sin(ang)) * h * (0.65 + 0.4 * hash1(fi * 2.2 + seed));
-            vec2 sc = mix(s0, s1, 0.5) + vec2(sin(fi * 2.0 + seed) * 0.012, 0.0);
-            float t, ac;
-            float d = bezD(q, s0, sc, s1, t, ac);
-            float m = smoothstep(0.0016 * (1.0 - t * 0.6) + 0.0006, 0.0003, d) * (1.0 - gLeaf * 1.3);
-            col = mix(col, mix(bgColor.rgb, mutedColor.rgb, 0.3) * 0.4 * skyAmb * 1.3, m);
-            cov = max(cov, m);
+    float field = 0.0;
+    vec2 grad = vec2(0.0);
+    int stems = kind < 0.5 ? 6 : 8;
+    for (int i = 0; i < 8; i++) {
+        if (i >= stems) break;
+        float fi = float(i);
+        float h1 = hash1(fi * 1.7 + seed), h2 = hash1(fi * 3.9 + seed), h3 = hash1(fi * 5.3 + seed);
+        vec2 s0 = base + vec2((h1 - 0.5) * w * (kind < 0.5 ? 0.40 : 0.22), 0.0);
+        vec2 s1, sc;
+        if (kind < 0.5) {
+            // Upright leaders, the middle ones tallest.
+            float lean = (h1 - 0.5) * 0.6;
+            float len = h * (0.55 + 0.45 * h2) * (1.0 - abs(h1 - 0.5) * 0.6);
+            s1 = s0 + vec2(lean * len, -len);
+            sc = mix(s0, s1, 0.5) + vec2((h3 - 0.5) * 0.015, 0.0);
+        } else {
+            // Fanned stems that arch outward and droop at the tips.
+            float ang = -1.5708 + (fi / float(stems - 1) - 0.5) * 2.2 + (h3 - 0.5) * 0.3;
+            float len = h * (0.75 + 0.45 * h2);
+            vec2 dir = vec2(cos(ang), sin(ang));
+            s1 = s0 + dir * len + vec2(0.0, len * 0.25 * abs(dir.x));
+            sc = s0 + dir * len * 0.65 - vec2(0.0, len * 0.10);
+        }
+        // Stems: seen where the foliage is thin.
+        float t, ac;
+        float d = bezD(q, s0, sc, s1, t, ac);
+        float sw = mix(0.0026, 0.0007, t);
+        float ms = smoothstep(sw + 0.0007, sw - 0.0003, d);
+        if (ms > 0.0) { col = mix(col, stemCol, ms * (1.0 - cov)); cov = max(cov, ms); }
+        // Foliage clusters along the stem, bigger toward the outside.
+        for (int k = 0; k < 4; k++) {
+            float fk = float(k);
+            float tc = kind < 0.5 ? 0.25 + fk * 0.23 : 0.35 + fk * 0.20;
+            vec2 cp = bez(s0, sc, s1, tc);
+            float hk = hash1(fi * 7.0 + fk * 2.3 + seed);
+            vec2 rr = kind < 0.5 ? vec2(w * 0.11, h * 0.20) * (1.0 - fk * 0.12) * (0.8 + 0.4 * hk)
+                                 : vec2(w * 0.15, h * 0.18) * (0.65 + 0.25 * fk) * (0.8 + 0.4 * hk);
+            vec2 dq = (q - cp - vec2(0.0, kind < 0.5 ? 0.0 : -rr.y * 0.3)) / rr;
+            float kk = exp(-dot(dq, dq));
+            field += kk;
+            grad += kk * dq / rr;
         }
     }
+
+    float edgeN = (fbm3(q * 70.0 + seed) - 0.5) * 0.8;
+    float level = field + edgeN;
+    float leafy = kind < 0.5 ? 1.0 : gLeaf;
+    float shade;
+    float tex = kind < 0.5 ? needles(q, 0.55 + 0.45 * smoothstep(0.3, 0.9, level), seed, shade)
+                           : leafDots(q, 0.0060, leafy * smoothstep(0.15, 0.5, level), seed, shade);
+    float inner = smoothstep(0.6, 1.1, level) * leafy;
+    float deep = kind < 0.5 ? inner : leafDots(q + 0.0027, 0.0060, inner * 0.9, seed * 2.3, shade);
+    float mass = max(tex * smoothstep(0.15, 0.45, level), deep * 0.9);
     if (mass > 0.0) {
         vec3 n = normalize(vec3(-grad.x * 0.02, grad.y * 0.02, 1.0));
         float lit = clamp(dot(n, L), 0.0, 1.0) * bodyStr;
         float topness = clamp(-grad.y * 0.01, -1.0, 1.0);
-        vec3 base3 = kind < 0.5 ? gFoliage * vec3(0.70, 0.88, 0.95) : gFoliage;
-        vec3 fol = kind < 0.5 ? base3 * (0.7 + 0.45 * shade) : seasonTint(base3 * (0.75 + 0.45 * shade), 0.02, 0.0);
-        vec3 fc = fol * (skyAmb * (0.8 + 0.3 * topness) * 1.2 + gSunLight * lit * 0.9);
-        // Ground contact: darker toward the root.
-        fc *= mix(0.45, 1.0, smoothstep(0.0, 0.35, hN));
+        vec3 fol = kind < 0.5 ? gFoliage * vec3(0.62, 0.82, 0.92) * (0.7 + 0.45 * shade)
+                              : seasonTint(gFoliage * (0.75 + 0.45 * shade), 0.02, 0.0);
+        vec3 fc = fol * (skyAmb * (0.8 + 0.3 * topness) * 1.15 + gSunLight * lit * 0.9);
+        fc *= mix(0.45, 1.0, smoothstep(0.0, 0.35, hN));                  // shade at the root
+        fc *= mix(0.8, 1.0, tex);                                          // depth behind the edge
         fc = mix(fc, mix(fgColor.rgb, gSkyLow, 0.3) * (0.45 + 0.5 * gDaylight), snowFall * smoothstep(0.1, 0.6, topness) * 0.9);
         col = mix(col, fc, mass);
         cov = max(cov, mass);
     }
-    // Berries in autumn on the deciduous bush, and a few left into winter.
+    // Berries in autumn on the deciduous bush, a few left into winter.
     if (kind > 0.5) {
         float berrySeason = smoothstep(0.66, 0.74, fract(season)) * (1.0 - smoothstep(0.95, 1.0, fract(season)))
                           + (1.0 - smoothstep(0.02, 0.10, fract(season))) * 0.5;
@@ -956,7 +1067,7 @@ vec4 shrub(vec2 p, vec2 base, float w, float h, float kind, float seed) {
             vec2 g = q / 0.006;
             vec2 id = floor(g);
             float hb = hash21(id + seed * 3.0);
-            if (hb < 0.10 * berrySeason) {
+            if (hb < 0.045 * berrySeason) {
                 vec2 ctr = id + 0.5 + (vec2(hash21(id + 1.3), hash21(id + 4.1)) - 0.5) * 0.6;
                 float bd = length(g - ctr);
                 float bm = smoothstep(0.30, 0.20, bd);
@@ -1053,7 +1164,7 @@ void main() {
 
     gStorm = max(wxStorm, wxRain * 0.6);
     gCover = clamp(wxCloud, 0.0, 1.0);
-    gGloom = clamp(wxCloud * 0.30 + gStorm * 0.45 + wxFog * 0.25, 0.0, 0.8);
+    gGloom = clamp(wxCloud * 0.30 + gStorm * 0.45 + wxFog * 0.25 + smoothstep(0.55, 1.0, wxRain) * 0.15, 0.0, 0.88);
     // Negative: sampling at x + drift moves features the other way.
     gDrift = -windTravel;
     gCold = clamp((6.0 - wxTemp) / 14.0, 0.0, 1.0);
@@ -1072,6 +1183,9 @@ void main() {
     gGrassAmt = smoothstep(-15.0, -6.0, wxTemp) * (1.0 - smoothstep(0.3, 0.8, wxSnow) * 0.9);
     gGrassH = mix(0.35, 1.0, smoothstep(-15.0, 3.0, wxTemp)) * (1.0 - clamp(wxSnow * 1.1, 0.0, 1.0) * 0.7);
     gDry = max(gDry, 1.0 - smoothstep(-8.0, 2.0, wxTemp));
+    // High summer: taller, thicker, greener grass.
+    gLush = smoothstep(0.38, 0.46, sN) * (1.0 - smoothstep(0.62, 0.71, sN)) * smoothstep(4.0, 12.0, wxTemp);
+    gGrassH *= 1.0 + 0.45 * gLush;
     gWindS = pow(clamp(wxWind, 0.0, 1.0), 0.8);
     gWindDir = windSide;
     // Plants lean on the theme, with a share of natural green so they read as
@@ -1321,7 +1435,7 @@ void main() {
                     float h = hash1(seedB);
                     // Clumps and bare patches, and fewer blades in the cold.
                     float clump = vnoise(vec2(cell * 0.045, float(r) * 0.7));
-                    if (h > (0.35 + 0.75 * clump) * gGrassAmt) continue;
+                    if (h > (0.35 + 0.75 * clump + 0.45 * gLush) * gGrassAmt) continue;
                     float inv = rowInv + (hash1(seedB + 1.9) - 0.5) * rowStep;
                     float rootX = (cell + hash1(seedB + 5.3)) * CELL_W;
                     float rx = rootX * inv;
@@ -1354,6 +1468,8 @@ void main() {
                     vec3 base = gGrassCol * (0.55 + 0.6 * hash1(seedB + 3.3));
                     vec3 bh3 = rgb2hsv(base);
                     bh3.x = hueMix(bh3.x, bh3.x + (hash1(seedB + 7.7) - 0.5) * 0.08, 1.0);
+                    bh3.y = min(bh3.y * (1.0 + 0.35 * gLush), 1.0);
+                    bh3.z *= 1.0 + 0.15 * gLush;
                     vec3 bc = seasonTint(hsv2rgb(bh3), 0.11, ownDry);
                     bc = mix(bc * 0.25, bc, t);                         // dark at the root
                     bc *= 0.85 + 0.25 * smoothstep(w, 0.0, d);          // lighter spine
@@ -1473,6 +1589,38 @@ void main() {
             }
         }
         col += rainCol * r * (0.40 + gFlash * 0.5);
+
+        // A downpour is a different animal: a dense sheet of fine streaks,
+        // grey curtains of rain sweeping across with the wind, and the
+        // world behind them washed out.
+        float heavy = smoothstep(0.55, 1.0, wxRain);
+        if (heavy > 0.0) {
+            vec2 q3 = vec2(p.x * 330.0 - p.y * slant * 0.9 * gWindDir, p.y * 36.0 - time * 12.0);
+            vec2 id3 = floor(q3);
+            vec2 f3 = fract(q3);
+            if (hash21(id3 + 77.0) < 0.26 * heavy) {
+                float j3 = (hash21(id3.yx + 5.0) - 0.5) * 0.7;
+                float r3 = smoothstep(0.05, 0.0, abs(f3.x - 0.5 - j3)) * smoothstep(0.0, 0.1, f3.y) * (1.0 - smoothstep(0.55, 0.95, f3.y));
+                col += rainCol * r3 * 0.35;
+            }
+            float curtain = fbm3(vec2((p.x - p.y * slant * 0.02 * gWindDir) * 2.2 - gWindDir * time * (0.25 + 0.9 * gWindS), p.y * 1.4 + time * 0.08));
+            vec3 veil = mix(gSkyLow, mix(mutedColor.rgb, fgColor.rgb, 0.35), 0.4) * (0.45 + 0.4 * gDaylight);
+            col = mix(col, veil, heavy * (0.16 + 0.34 * smoothstep(0.42, 0.78, curtain)));
+        }
+
+        // Splashes: little crowns bursting in the meadow.
+        if (wxRain > 0.25 && p.y > shoreY) {
+            vec2 g = vec2(p.x * 240.0, p.y * 110.0);
+            vec2 gid = floor(g);
+            float gh = hash21(gid + 31.0);
+            if (gh < wxRain * 0.30) {
+                float ph = fract(time * 2.2 + gh * 13.0);
+                vec2 ctr = gid + vec2(0.5, 0.7);
+                vec2 dd = (g - ctr) * vec2(1.0, 1.8);
+                float ring = smoothstep(0.08, 0.0, abs(length(dd) - ph * 0.45)) * step(dd.y, 0.02) * (1.0 - ph);
+                col += rainCol * ring * 0.55;
+            }
+        }
     }
 
     // ---- the tree ----
@@ -1567,6 +1715,18 @@ void main() {
             float r = smoothstep(0.08, 0.0, abs(f.x - 0.5 - jitter))
                     * smoothstep(0.0, 0.12, f.y) * (1.0 - smoothstep(0.50, 0.95, f.y));
             col += rainCol * r * (0.22 + gFlash * 0.4);
+        }
+        // Big, close, fast streaks in a downpour.
+        float heavyF = smoothstep(0.6, 1.0, wxRain);
+        if (heavyF > 0.0) {
+            vec2 qn = vec2(p.x * 42.0 - p.y * slant * 1.8 * gWindDir, p.y * 5.0 - time * 16.0);
+            vec2 idn = floor(qn);
+            vec2 fn = fract(qn);
+            if (hash21(idn + 91.0) < 0.07 * heavyF) {
+                float jn = (hash21(idn.yx + 13.0) - 0.5) * 0.6;
+                float rn = smoothstep(0.10, 0.0, abs(fn.x - 0.5 - jn)) * smoothstep(0.0, 0.15, fn.y) * (1.0 - smoothstep(0.45, 0.9, fn.y));
+                col += rainCol * rn * 0.30;
+            }
         }
     }
     if (wxSnow > 0.01) {

@@ -188,10 +188,10 @@ Item {
     else if (c === 2) pr.cloud = 0.55
     else if (c === 3) pr.cloud = 0.95
     else if (c === 45 || c === 48) { pr.cloud = 0.8; pr.fog = c === 48 ? 0.9 : 0.7 }
-    else if (c >= 51 && c <= 57) { pr.cloud = 0.9; pr.rain = c <= 51 ? 0.25 : c <= 53 ? 0.35 : 0.45 }
-    else if (c >= 61 && c <= 67) { pr.cloud = 0.95; pr.rain = (c === 61 || c === 66) ? 0.5 : (c === 63) ? 0.75 : 1.0 }
+    else if (c >= 51 && c <= 57) { pr.cloud = 0.9; pr.rain = c <= 51 ? 0.15 : c <= 53 ? 0.22 : 0.30 }
+    else if (c >= 61 && c <= 67) { pr.cloud = 0.95; pr.rain = (c === 61 || c === 66) ? 0.38 : (c === 63) ? 0.58 : 1.0 }
     else if (c >= 71 && c <= 77) { pr.cloud = 0.95; pr.snow = c === 71 ? 0.4 : c === 73 ? 0.7 : c === 75 ? 1.0 : 0.35 }
-    else if (c >= 80 && c <= 82) { pr.cloud = 0.8; pr.rain = c === 80 ? 0.5 : c === 81 ? 0.75 : 1.0 }
+    else if (c >= 80 && c <= 82) { pr.cloud = 0.8; pr.rain = c === 80 ? 0.40 : c === 81 ? 0.65 : 1.0 }
     else if (c === 85 || c === 86) { pr.cloud = 0.85; pr.snow = c === 85 ? 0.55 : 0.9 }
     else if (c >= 95) { pr.cloud = 1.0; pr.rain = 0.85; pr.storm = c === 95 ? 0.7 : 1.0 }
     return pr
