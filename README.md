@@ -7,7 +7,8 @@ that is playing, and is built around an icon of your choosing.
 ![Aurora, thunder, nebula and embers](preview.png)
 
 Styles: **aurora** (curtains of light), **thunder** (a storm over the sea),
-**embers**, **nebula**, **ink** and **weather** (the sky over your actual
+**embers**, **nebula** (the logo as a black hole), **ink** (a live dye
+simulation) and **weather** (the sky over your actual
 location, right now).
 
 ## Install

@@ -780,6 +780,40 @@ Item {
         source: root.iconUrl("dist.png")
       }
 
+      // Ink's persistent dye: ink-sim.frag advects last frame's state and
+      // writes the next one; the recursive source feeds it back each frame.
+      // Half resolution in 16-bit float -- 8-bit would band and the fade
+      // would stall on small values.
+      ShaderEffectSource {
+        id: inkBuffer
+        visible: false
+        sourceItem: inkSim
+        recursive: true
+        hideSource: true
+        live: root.shaderEnabled && root.shaderName === "ink"
+        format: ShaderEffectSource.RGBA16F
+        textureSize: Qt.size(Math.max(2, Math.round(parent.width / 2)), Math.max(2, Math.round(parent.height / 2)))
+        smooth: true
+        wrapMode: ShaderEffectSource.ClampToEdge
+      }
+
+      ShaderEffect {
+        id: inkSim
+        anchors.fill: parent
+        visible: root.shaderEnabled && root.shaderName === "ink"
+        blending: false
+
+        property real time: root.shaderTime
+        property real aspect: width / Math.max(height, 1)
+        property real inkFlow: root.cfgInkFlow
+        property point inkTexel: Qt.point(1 / Math.max(2, Math.round(width / 2)), 1 / Math.max(2, Math.round(height / 2)))
+        property var prevState: inkBuffer
+        property var maskSource: maskTexture
+        property var distSource: distTexture
+
+        fragmentShader: Qt.resolvedUrl("shaders/ink-sim.frag.qsb")
+      }
+
       ShaderEffect {
         id: shaderLayer
         anchors.fill: parent
@@ -884,6 +918,8 @@ Item {
         property vector4d spark63: root.sparks[63] || Qt.vector4d(-100, 0, 0, 0)
         property real nebulaDrift: root.cfgNebulaDrift
         property real inkFlow: root.cfgInkFlow
+        property point inkTexel: inkSim.inkTexel
+        property var inkState: inkBuffer
         property var maskSource: maskTexture
         property var distSource: distTexture
 

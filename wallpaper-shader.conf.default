@@ -34,11 +34,12 @@ thunder_rain = 0.20
 # Ember drift: how many motes are in the air (1.0 = default).
 ember_density = 1.0
 
-# Nebula: overall speed of the galactic rotation, the orbiting core and the
-# star parallax (1.0 = default).
+# Nebula (the black hole): speed of the accretion disc, the inflow down the
+# throat, the jets and the drifting gas behind the lens (1.0 = default).
 nebula_drift = 1.0
 
-# Ink: speed of the flow field carrying the ink (1.0 = default).
+# Ink: speed of the water carrying the dye (1.0 = default). Drops keep
+# falling at the same pace; only the current changes.
 ink_flow = 1.0
 
 # Aurora: how far (in degrees round the colour wheel) the hem and crown are
