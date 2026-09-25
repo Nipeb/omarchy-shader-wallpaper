@@ -77,6 +77,7 @@ place; remove them with `omarchy pkg remove` if nothing else uses them.
 omarchy-wallpaper-shader next | prev | set <style> | list
 omarchy-wallpaper-shader on | off | toggle
 omarchy-wallpaper-shader audio on | off | toggle
+omarchy-wallpaper-shader --testing  # weather test panel (see below)
 omarchy-wallpaper-icon image        # pick another PNG
 omarchy-wallpaper-icon omarchy      # back to the Omarchy logo (the default)
 omarchy-wallpaper-icon none         # no icon
@@ -101,12 +102,32 @@ and so on. Edits apply live. It sits outside the plugin folder so
 
 ## Weather style
 
-Uses the same location as the Omarchy weather widget (set it there, or with
-`omarchy-weather-location`), falling back to your IP's location, and fetches
-conditions from Open-Meteo every 15 minutes while that style is selected. The
-last good answer is cached, so a network blip never blanks the sky.
+A lake landscape: mountains, forest, an island, a meadow, birches and a pine,
+under the sky outside your window. It uses the same location as the Omarchy
+weather widget (set it there, or with `omarchy-weather-location`), falling back
+to your IP's location, and fetches conditions from Open-Meteo every 15 minutes
+while that style is selected. The last good answer is cached, so a network blip
+never blanks the sky.
+
+- The sun and moon follow the real sunrise, sunset and moon phase.
+- Cloud, rain, snow, fog, storms and wind (speed **and** direction) come from
+  the forecast; downpours and blizzards have their own heavier effects.
+- The date sets the season: grass and leaves go from spring green through
+  autumn colour to bare winter branches, and hard frost takes the grass away.
+- Now and then something happens on its own: birds and a soaring bird of prey,
+  fish rising in calm water, an aurora on clear nights, shooting stars, a
+  campfire on the far shore, hikers with head torches in the mountains.
+
 `weather_preview_code` / `weather_preview_phase` in the config preview any
-weather or time of day.
+weather or time of day. For trying things out, `omarchy-wallpaper-shader
+--testing` shows a small panel in the bottom-right corner (weather style only)
+with buttons for the weather, time of day, wind speed and direction,
+temperature, season, the occasional events, and skipping the clock ahead.
+Its overrides are live-only; **Close** (or `omarchy-wallpaper-shader testing
+off`) hides it and returns to the real weather.
+
+The weather style redraws at 30 fps (the others at 60), since it moves slowly
+and is the heaviest to draw.
 
 ## Working on the shaders
 
