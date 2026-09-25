@@ -18,8 +18,10 @@
 //               valley fog lying between them
 //   lake     -- mirrors the sky, the mountains and the tree, rippled by the
 //               wind, with a glitter path under the sun or moon and rain rings
-//   shore    -- grass that bends in the wind, and big spruces framing the
-//               sides, which hold snow
+//   shore    -- a meadow of particle blades bent by gusting wind, framed by
+//               a birch and an oak whose leaves follow the season
+//   season   -- the date turns grass and leaves from spring green through
+//               autumn gold to winter bare; frost shrinks the grass away
 //   life     -- birds crossing on fair days, fireflies on warm nights, and
 //               lightning that actually strikes
 //
@@ -51,6 +53,7 @@ layout(std140, binding = 0) uniform buf {
     float wxStorm;     // 0..1
     float wxWind;      // 0..1 (about 0..60 km/h)
     float wxTemp;      // degrees C
+    float season;      // fraction of the year, 0 = 1 January
 };
 
 layout(binding = 1) uniform sampler2D maskSource;
@@ -144,6 +147,9 @@ float gSideSign, gFlash, gFlashX, gBodyUp, gNight;
 vec2 gBody;
 vec3 gSkyTop, gSkyLow, gDusk, gBodyCol, gSunLight, gAccHsv;
 bool gIsDay;
+// Season and wind, derived once in main().
+float gLeaf, gAutumn, gSpring, gDry, gFallRate, gFlowers, gGrassAmt, gGrassH, gWindS, gWindDir;
+vec3 gGrassCol, gFoliage;
 
 // ---------------------------------------------------------------- clouds ---
 
@@ -454,48 +460,355 @@ vec3 skyAt(vec2 p, bool refl) {
 
 // --------------------------------------------------------------- foreground ---
 
-// A big spruce: tiers of drooping boughs, each side its own length, a fringe
-// of needles on every edge, swaying at the top. `snowTop` marks the upper
-// face of each bough, `edgeSide` the outline (signed by side, for rim light).
-float spruce(vec2 p, float cx, float topY, float halfBase, float seed,
-             out float snowTop, out float edgeSide) {
-    snowTop = 0.0;
-    edgeSide = 0.0;
-    if (p.y < topY) return 0.0;
-    float H = 0.52 - topY;
-    float u = (p.y - topY) / H;
-    float sway = sin(time * (0.6 + wxWind * 1.2) + seed * 5.0) * (0.002 + wxWind * 0.010) * (1.0 - u)
-               + sin(time * 2.3 + seed) * 0.0008 * wxWind * (1.0 - u);
-    float x = p.x - cx - sway;
-    float side = x < 0.0 ? -1.0 : 1.0;
-    float tiers = 12.0 + hash1(seed) * 5.0;
-    // Boughs droop: the farther from the trunk, the lower each tier sits,
-    // so tiers read as hanging chevrons rather than flat slabs.
-    float droop = abs(x) / max(halfBase * pow(u, 0.85), 1e-3);
-    float tu = u * tiers + hash1(seed * 3.0) + 0.35 * sin(u * 17.0 + seed) - droop * 0.55;
-    float ti = floor(tu);
-    float f = fract(tu);
-    float reach = 0.70 + 0.50 * hash1(ti * 7.3 + seed * 1.9 + side * 1.7);
-    // Bough profile: tucked at its top, widest where it droops, then tucked
-    // under again.
-    float prof = pow(f, 0.55) * (1.0 - 0.30 * smoothstep(0.82, 1.0, f));
-    // Ragged, asymmetric silhouette: each side wanders on its own, so the
-    // tiers blur into boughs instead of stacking as cones.
-    float ragged = 0.82 + 0.32 * fbm3(vec2(u * 22.0, side * 3.0 + seed * 5.0));
-    float w = halfBase * pow(u, 0.85) * (0.55 + 0.45 * prof) * reach * ragged;
-    // Needle fringe: clumps along the bough edge, not per-scanline noise.
-    vec2 np = vec2(x * 90.0, p.y * 140.0) + seed * 13.0;
-    w *= 0.78 + 0.34 * fbm3(np) + 0.14 * vnoise(np * 3.1);
-    w = max(w, 0.0015);
-    float dx = abs(x);
-    float m = smoothstep(w + 0.0012, w - 0.0012, dx);
-    float trunk = smoothstep(0.0055, 0.0040, dx) * step(0.88, u);
-    // Snow lies on the upper face of each bough, out toward its drooping tip,
-    // in clumps.
-    snowTop = m * smoothstep(0.16, 0.02, f) * smoothstep(0.35, 0.8, dx / w)
-            * smoothstep(0.35, 0.6, vnoise(vec2(x * 160.0, p.y * 90.0) + seed));
-    edgeSide = m * smoothstep(0.0045, 0.0, w - dx) * side;
-    return max(m, trunk);
+vec2 rot2(vec2 p, float a) {
+    float c = cos(a), s = sin(a);
+    return vec2(c * p.x - s * p.y, s * p.x + c * p.y);
+}
+
+// Hue blend along the short way round the wheel.
+float hueMix(float a, float b, float t) {
+    float d = b - a;
+    d -= floor(d + 0.5);
+    return fract(a + d * t);
+}
+
+// A plant colour through the year: fresher and yellower in spring, turning
+// toward `autumnHue` in autumn, cured to straw and brown when dead.
+vec3 seasonTint(vec3 c, float autumnHue, float dead) {
+    vec3 h = rgb2hsv(c);
+    h.x = hueMix(h.x, 0.24, gSpring * 0.35);
+    h.z *= 1.0 + gSpring * 0.25;
+    h.x = hueMix(h.x, autumnHue, gAutumn);
+    h.y = mix(h.y, max(h.y, 0.62), gAutumn * 0.8);
+    h.z *= 1.0 + gAutumn * 0.15;
+    h.x = hueMix(h.x, 0.09, dead);
+    h.y = mix(h.y, 0.32, dead);
+    h.z *= 1.0 - dead * 0.25;
+    return hsv2rgb(clamp(h, 0.0, 1.0));
+}
+
+// Distance to a segment, with the position along it.
+float segD(vec2 p, vec2 a, vec2 b, out float h) {
+    vec2 pa = p - a, ba = b - a;
+    h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-8), 0.0, 1.0);
+    return length(pa - ba * h);
+}
+
+// How a tree leans: a steady push with the wind plus gust-driven rocking,
+// growing with height (hN = 0 at the root, 1 at the crown).
+float treeSway(float hN, float seed) {
+    float gust = fbm3(vec2(time * (0.25 + 0.9 * gWindS), seed));
+    float push = gWindDir * (0.003 + 0.100 * pow(gWindS, 1.5)) * (0.55 + 0.9 * gust);
+    float rock = sin(time * (0.7 + 2.4 * gWindS) + seed * 3.0) * (0.002 + 0.012 * gWindS);
+    return (push + rock) * hN * hN;
+}
+
+// Leaf particles: a grid of cells, each holding at most one small leaf with
+// its own position, angle and flutter. `density` (0..1) is the chance a cell
+// has a leaf; `shade` returns that leaf's random tone, `found` its coverage.
+float leafDots(vec2 q, float cell, float density, float seed, out float shade) {
+    shade = 0.0;
+    if (density <= 0.0) return 0.0;
+    vec2 g = q / cell;
+    vec2 b = floor(g);
+    float best = 0.0;
+    for (int oy = -1; oy <= 1; oy++) {
+        for (int ox = -1; ox <= 1; ox++) {
+            vec2 c = b + vec2(float(ox), float(oy));
+            float h = hash21(c + seed);
+            if (h > density) continue;
+            float hh = hash21(c + seed + 3.7);
+            vec2 flutter = vec2(sin(time * (3.0 + 10.0 * gWindS) + hh * 30.0),
+                                cos(time * (2.5 + 9.0 * gWindS) + hh * 17.0)) * (0.05 + 0.25 * gWindS);
+            vec2 ctr = c + 0.5 + (vec2(hash21(c + seed + 1.1), hh) - 0.5) * 0.8 + flutter;
+            float ang = hh * 6.2831 + sin(time * (2.0 + 6.0 * gWindS) + h * 20.0) * (0.2 + 0.8 * gWindS);
+            vec2 lq = rot2(g - ctr, ang);
+            float d = length(lq / vec2(0.62, 0.36));
+            float m = smoothstep(1.0, 0.72, d);
+            if (m > best) { best = m; shade = hash21(c + seed + 9.9); }
+        }
+    }
+    return best;
+}
+
+vec2 bez(vec2 a, vec2 c, vec2 b, float t) {
+    return mix(mix(a, c, t), mix(c, b, t), t);
+}
+
+// Silver birch: slender white trunk with dark lenticels; branches rise and
+// arch over, and from them hang thin weeping twigs dressed in small leaves
+// (bare in winter). Returns colour in rgb and coverage in a.
+vec4 birch(vec2 p, float bx, float topY, float seed) {
+    const float baseY = 0.56;
+    float H = baseY - topY;
+    float hN = (baseY - p.y) / H;
+    if (hN < -0.05 || hN > 1.1 || abs(p.x - bx) > H * 0.52) return vec4(0.0);
+    vec2 q = vec2(p.x - treeSway(clamp(hN, 0.0, 1.2), seed), p.y);
+
+    vec3 skyAmb = mix(gSkyTop, gSkyLow, 0.5);
+    float bodyStr = gIsDay ? gDaylight * (1.0 - gGloom * 0.7) : 0.25 * (1.0 - gGloom);
+    vec3 L = normalize(vec3(gBody.x - p.x, p.y - gBody.y, 0.4));
+    float snowFall = clamp(wxSnow * 1.3 + gCold * 0.2 - 0.1, 0.0, 1.0);
+
+    vec3 col = vec3(0.0);
+    float cov = 0.0;
+
+    // Trunk.
+    float tx = bx + 0.022 * sin(hN * 2.6 + seed) * hN;
+    float tw = mix(0.020, 0.0022, pow(clamp(hN, 0.0, 1.0), 0.75));
+    float dT = abs(q.x - tx);
+    if (hN < 1.0 && dT < tw + 0.002) {
+        float m = smoothstep(tw + 0.0012, tw - 0.0012, dT);
+        float u = (q.x - tx) / tw;
+        float round_ = sqrt(max(1.0 - u * u, 0.0));
+        vec3 bark = mix(fgColor.rgb, mutedColor.rgb, 0.25) * 0.95;
+        float dash = smoothstep(0.62, 0.72, vnoise(vec2(u * 2.5 + seed, q.y * 260.0)))
+                   * smoothstep(0.3, 0.6, vnoise(vec2(u * 6.0, q.y * 40.0 + seed)));
+        float base = smoothstep(0.30, 0.05, hN) * smoothstep(0.35, 0.75, vnoise(vec2(u * 5.0, q.y * 90.0)));
+        bark = mix(bark, bgColor.rgb * 0.15, clamp(dash * 0.85 + base * 0.9, 0.0, 1.0));
+        float lit = 0.45 + 0.55 * clamp(dot(normalize(vec3(u, 0.2, round_)), L), 0.0, 1.0) * bodyStr;
+        col = bark * (skyAmb * 0.9 + gSunLight * lit * 0.6) * (0.55 + 0.45 * round_);
+        cov = m;
+    }
+
+    // Branches (curved) and hanging twigs; track the nearest twig for leaves.
+    float twigD = 1e3;
+    float branchD = 1e3;
+    float twigT = 0.0;
+    vec2 twigRoot = vec2(0.0);
+    for (int i = 0; i < 12; i++) {
+        float fi = float(i);
+        float hh = hash1(seed * 7.0 + fi * 3.1);
+        float h0 = mix(0.38, 1.0, (fi + hh * 0.9) / 12.0);
+        float side = mod(fi, 2.0) < 0.5 ? -1.0 : 1.0;
+        if (hash1(fi * 5.3 + seed) > 0.8) side = -side;
+        vec2 a = vec2(bx + 0.022 * sin(h0 * 2.6 + seed) * h0, baseY - h0 * H);
+        float len = H * (0.30 - 0.19 * h0) * (0.7 + 0.6 * hh);
+        float rise = 0.35 + 0.5 * hash1(fi * 2.9 + seed);
+        vec2 e = a + vec2(side * len * (0.7 + 0.3 * hh), len * (0.30 * hash1(fi + seed * 2.0) - 0.1));
+        vec2 c = a + vec2(side * len * (0.2 + 0.25 * hh), -len * rise);
+        // Wood, as four chords of the curve.
+        float mb = 0.0;
+        vec2 prev = a;
+        for (int k = 1; k <= 4; k++) {
+            float t = float(k) / 4.0;
+            vec2 cur = bez(a, c, e, t);
+            float tt;
+            float d = segD(q, prev, cur, tt);
+            float w = mix(0.0026, 0.0006, (float(k - 1) + tt) / 4.0) * (1.0 - h0 * 0.35);
+            mb = max(mb, smoothstep(w + 0.0009, w - 0.0004, d));
+            if (k >= 2) branchD = min(branchD, d);
+            prev = cur;
+        }
+        if (mb > 0.0) {
+            vec3 wood = mix(fgColor.rgb * 0.55, bgColor.rgb * 0.30, 0.45) * (skyAmb * 1.0 + gSunLight * bodyStr * 0.3);
+            col = mix(col, wood, mb * (1.0 - cov) * (1.0 - gLeaf * 0.35));
+            cov = max(cov, mb);
+        }
+        // Weeping twigs off the outer half of the branch.
+        for (int k = 0; k < 6; k++) {
+            float fk = float(k);
+            float tr = 0.25 + fk * 0.14;
+            vec2 root = bez(a, c, e, tr);
+            float tl = len * (0.45 + 0.45 * hash1(fi * 9.0 + fk + seed)) * (1.0 - gWindS * 0.25);
+            float swing = gWindDir * gWindS * tl * 0.9 + sin(time * (1.5 + 4.0 * gWindS) + fi + fk * 2.0) * tl * (0.04 + 0.2 * gWindS);
+            vec2 mid = root + vec2(side * tl * 0.10 + swing * 0.4, tl * 0.5);
+            vec2 tip = root + vec2(side * tl * 0.05 + swing, tl);
+            float t1, t2;
+            float d1 = segD(q, root, mid, t1);
+            float d2 = segD(q, mid, tip, t2);
+            float d = min(d1, d2);
+            float tAlong = d1 < d2 ? t1 * 0.5 : 0.5 + t2 * 0.5;
+            if (d < twigD) { twigD = d; twigT = tAlong; twigRoot = root; }
+            float twig = smoothstep(0.0010, 0.0003, d) * (1.0 - gLeaf * 0.7);
+            if (twig > 0.0) {
+                vec3 tc = mix(fgColor.rgb * 0.35, bgColor.rgb * 0.3, 0.5) * skyAmb * 1.2;
+                tc = mix(tc, mix(fgColor.rgb, gSkyLow, 0.3) * 0.7, snowFall * 0.5);
+                col = mix(col, tc, twig * (1.0 - cov));
+                cov = max(cov, twig);
+            }
+        }
+    }
+
+    // Leaves: small particles strung along the twigs, airy at the edges.
+    if (gLeaf > 0.01) {
+        float env = max(smoothstep(0.019, 0.003, twigD) * smoothstep(0.0, 0.10, twigT),
+                        smoothstep(0.012, 0.002, branchD) * 0.9);
+        float shade;
+        float lm = leafDots(q, 0.0055, gLeaf * env * 0.95, seed * 3.1, shade);
+        if (lm > 0.0) {
+            vec3 fol = seasonTint(gFoliage * (0.75 + 0.5 * shade), 0.135, 0.0);
+            // Some leaves turn earlier than others.
+            fol = mix(fol, seasonTint(gFoliage, 0.12, 0.35), step(0.8, shade) * gAutumn);
+            float lit = 0.55 + 0.6 * bodyStr * (0.5 + 0.5 * sign(gBody.x - twigRoot.x) * sign(q.x - twigRoot.x));
+            vec3 lc = fol * (skyAmb * 1.1 + gSunLight * lit * 0.7) * (0.8 + 0.3 * (1.0 - twigT));
+            col = mix(col, lc, lm);
+            cov = max(cov, lm);
+        }
+    }
+    return vec4(col, cov);
+}
+
+// Oak: a thick, furrowed trunk that forks into crooked limbs under a broad,
+// lumpy crown. The crown thins and turns rust in autumn; bare limbs in winter.
+vec4 oak(vec2 p, float bx, float seed) {
+    const float baseY = 0.56;
+    const float crownY = -0.14;
+    float H = baseY - crownY;
+    float hN = (baseY - p.y) / H;
+    if (hN < -0.05 || hN > 1.75 || abs(p.x - bx) > 0.62) return vec4(0.0);
+    vec2 q = vec2(p.x - treeSway(clamp(hN, 0.0, 1.6), seed) * 0.6, p.y);
+
+    vec3 skyAmb = mix(gSkyTop, gSkyLow, 0.5);
+    float bodyStr = gIsDay ? gDaylight * (1.0 - gGloom * 0.7) : 0.25 * (1.0 - gGloom);
+    vec3 L = normalize(vec3(gBody.x - p.x, p.y - gBody.y, 0.4));
+    vec3 barkBase = mix(bgColor.rgb, mutedColor.rgb, 0.35) * 0.45;
+
+    vec3 col = vec3(0.0);
+    float cov = 0.0;
+
+    // Trunk: wide at the flare, gnarled.
+    float trunkTop = 0.08;
+    if (q.y > trunkTop - 0.02) {
+        float tN = clamp((baseY - q.y) / (baseY - trunkTop), 0.0, 1.0);
+        float tx = bx + (fbm3(vec2(q.y * 6.0, seed)) - 0.5) * 0.03;
+        float tw = mix(0.060, 0.032, pow(tN, 0.6)) * (0.92 + 0.16 * vnoise(vec2(q.y * 30.0, seed)));
+        float dT = abs(q.x - tx);
+        float m = smoothstep(tw + 0.0015, tw - 0.0015, dT);
+        if (m > 0.0) {
+            float u = (q.x - tx) / tw;
+            float round_ = sqrt(max(1.0 - u * u, 0.0));
+            float furrow = vnoise(vec2(u * 9.0 + seed, q.y * 22.0)) * 0.6 + vnoise(vec2(u * 22.0, q.y * 60.0)) * 0.4;
+            vec3 bark = barkBase * (0.55 + 0.7 * furrow);
+            float lit = clamp(dot(normalize(vec3(u, 0.1, round_)), L), 0.0, 1.0) * bodyStr;
+            col = bark * (skyAmb * 0.8 + gSunLight * lit * 0.9) * (0.5 + 0.5 * round_);
+            cov = m;
+        }
+    }
+
+    // Limbs: crooked, two bends each, spreading wide.
+    float snowFall = clamp(wxSnow * 1.3 + gCold * 0.2 - 0.1, 0.0, 1.0);
+    for (int i = 0; i < 8; i++) {
+        float fi = float(i);
+        float hh = hash1(seed * 5.0 + fi * 2.7);
+        float ang = mix(-2.75, -0.39, (fi + 0.5) / 8.0) + (hh - 0.5) * 0.3;   // upward fan
+        vec2 dir = vec2(cos(ang), sin(ang));
+        vec2 a = vec2(bx + (hh - 0.5) * 0.03, trunkTop + 0.02 - hh * 0.05);
+        float len = 0.16 + 0.12 * hash1(fi * 4.1 + seed);
+        vec2 b = a + rot2(dir, (hh - 0.5) * 0.6) * len * 0.45;
+        vec2 c = b + rot2(dir, (hash1(fi + seed) - 0.5) * 0.9) * len * 0.35;
+        vec2 e = c + rot2(dir, (hash1(fi * 2.0 + seed) - 0.5) * 1.1 - 0.2 * sign(dir.x)) * len * 0.30;
+        float t1, t2, t3;
+        float d1 = segD(q, a, b, t1), d2 = segD(q, b, c, t2), d3 = segD(q, c, e, t3);
+        float w1 = mix(0.020, 0.012, t1), w2 = mix(0.012, 0.006, t2), w3 = mix(0.006, 0.0018, t3);
+        float mb = max(max(smoothstep(w1 + 0.0012, w1 - 0.0008, d1), smoothstep(w2 + 0.0012, w2 - 0.0006, d2)),
+                       smoothstep(w3 + 0.0010, w3 - 0.0004, d3));
+        if (mb > 0.0) {
+            float furrow = vnoise(q * vec2(90.0, 120.0) + fi);
+            vec3 wood = barkBase * (0.6 + 0.5 * furrow) * (skyAmb * 0.9 + gSunLight * bodyStr * 0.35);
+            vec2 pa = d1 < d2 ? mix(a, b, t1) : (d2 < d3 ? mix(b, c, t2) : mix(c, e, t3));
+            wood = mix(wood, mix(fgColor.rgb, gSkyLow, 0.3) * (0.5 + 0.4 * gDaylight), snowFall * step(q.y, pa.y - 0.001) * 0.9);
+            col = mix(col, wood, mb * (1.0 - cov * 0.0));
+            cov = max(cov, mb);
+        }
+        // Sub-branches off each limb, each ending in a spray of twigs.
+        for (int k = 0; k < 3; k++) {
+            float fk = float(k);
+            vec2 s0 = k == 0 ? mix(a, b, 0.7) : (k == 1 ? mix(b, c, 0.6) : mix(c, e, 0.5));
+            float sa = ang + (hash1(fi * 7.1 + fk * 3.3 + seed) - 0.5) * 1.8 + (fk - 1.0) * 0.4;
+            float sl = len * (0.30 + 0.25 * hash1(fi * 5.7 + fk + seed));
+            vec2 s1 = s0 + vec2(cos(sa), sin(sa)) * sl * 0.55;
+            vec2 s2 = s1 + rot2(vec2(cos(sa), sin(sa)), (hash1(fi + fk * 9.0 + seed) - 0.5) * 1.2) * sl * 0.45;
+            float u1, u2;
+            float e1 = segD(q, s0, s1, u1), e2 = segD(q, s1, s2, u2);
+            float sw1 = mix(0.0055, 0.0030, u1), sw2 = mix(0.0030, 0.0012, u2);
+            float ms = max(smoothstep(sw1 + 0.001, sw1 - 0.0005, e1), smoothstep(sw2 + 0.0009, sw2 - 0.0004, e2));
+            if (gLeaf < 0.6) {
+                for (int m = 0; m < 3; m++) {
+                    float fm = float(m);
+                    vec2 w0 = mix(s1, s2, 0.3 + fm * 0.35);
+                    vec2 w1 = w0 + rot2(vec2(cos(sa), sin(sa)), (hash1(fi * 3.0 + fk * 5.0 + fm + seed) - 0.5) * 2.0) * 0.035;
+                    float uu;
+                    float ed = segD(q, w0, w1, uu);
+                    ms = max(ms, smoothstep(0.0011, 0.0003, ed) * (1.0 - gLeaf * 1.6));
+                }
+            }
+            if (ms > 0.0) {
+                vec3 wood = barkBase * (0.7 + 0.4 * vnoise(q * 140.0 + fk)) * (skyAmb * 0.95 + gSunLight * bodyStr * 0.3);
+                wood = mix(wood, mix(fgColor.rgb, gSkyLow, 0.3) * (0.5 + 0.4 * gDaylight), snowFall * step(q.y, mix(s0, s2, 0.5).y) * 0.5);
+                col = mix(col, wood, ms);
+                cov = max(cov, ms);
+            }
+        }
+        // Winter twigs off each limb end.
+        if (gLeaf < 0.5) {
+            for (int k = 0; k < 3; k++) {
+                float fk = float(k);
+                vec2 tw0 = mix(c, e, 0.3 + fk * 0.3);
+                vec2 tw1 = tw0 + rot2(dir, (hash1(fi * 3.0 + fk + seed) - 0.5) * 1.6) * 0.05;
+                float tt;
+                float dd = segD(q, tw0, tw1, tt);
+                float twig = smoothstep(0.0012, 0.0003, dd) * (1.0 - gLeaf * 2.0);
+                col = mix(col, barkBase * skyAmb * 0.9, twig * (1.0 - cov));
+                cov = max(cov, twig);
+            }
+        }
+    }
+
+    // Crown: one lumpy mass (a soft union of clumps), solid inside and
+    // breaking into leaf particles at its edge. Shaded as a whole, with the
+    // lumps adding local relief.
+    if (gLeaf > 0.01) {
+        float field = 0.0;
+        vec2 grad = vec2(0.0);
+        for (int i = 0; i < 30; i++) {
+            float fi = float(i);
+            vec2 cp;
+            if (i < 8) {
+                float hh = hash1(seed * 5.0 + fi * 2.7);
+                float ang = mix(-2.75, -0.39, (fi + 0.5) / 8.0) + (hh - 0.5) * 0.3;
+                float len = 0.16 + 0.12 * hash1(fi * 4.1 + seed);
+                cp = vec2(bx, trunkTop) + vec2(cos(ang), sin(ang)) * len * 0.95;
+            } else {
+                float r1 = hash1(fi * 1.7 + seed), r2 = hash1(fi * 3.9 + seed);
+                float an = r1 * 6.2831;
+                cp = vec2(bx, crownY + 0.03) + vec2(cos(an) * 0.29, sin(an) * 0.16) * sqrt(r2);
+            }
+            float rr = (0.060 + 0.035 * hash1(fi * 6.1 + seed)) * (0.7 + 0.3 * gLeaf);
+            vec2 dq = (q - cp) * vec2(1.0, 1.15);
+            float k = exp(-dot(dq, dq) / (rr * rr));
+            field += k;
+            grad += k * dq / (rr * rr);
+        }
+        // Lumpy boundary: a threshold on the summed field, broken by noise.
+        float edgeN = (fbm3(q * 22.0 + seed) - 0.5) * 0.7 + (fbm3(q * 70.0 + seed * 2.0) - 0.5) * 0.35;
+        float level = field + edgeN;
+        // Sky gaps through the crown where the foliage is thinnest.
+        float holes = smoothstep(0.30, 0.50, fbm3(q * 16.0 + seed * 4.0) + (field - 1.0) * 0.25);
+        float inner = smoothstep(0.55, 0.9, level) * holes;
+        float halo = smoothstep(0.20, 0.55, level);
+        float shade;
+        float dots = leafDots(q, 0.0075, gLeaf * halo, seed * 1.7, shade);
+        float thin = 1.0 - gLeaf;                         // autumn: see through it
+        float mass = max(inner * (1.0 - thin * 0.9) * smoothstep(0.35, 0.6, vnoise(q * 160.0 + seed) + gLeaf * 0.6), dots);
+        if (mass > 0.0) {
+            // Crown-scale shape plus the relief of individual leaf clusters.
+            vec2 cq = q * 38.0 + seed;
+            float c0 = fbm3(cq);
+            vec2 cg = vec2(fbm3(cq + vec2(0.05, 0.0)) - c0, fbm3(cq + vec2(0.0, 0.05)) - c0) / 0.05;
+            vec3 n = normalize(vec3(-grad.x * 0.02 - cg.x * 0.9, grad.y * 0.02 + cg.y * 0.9, 1.0));
+            float lit = clamp(dot(n, L), 0.0, 1.0) * bodyStr;
+            float cy = clamp((q.y - crownY) / 0.18, -1.0, 1.0);
+            float under = smoothstep(-0.2, 1.0, cy);
+            vec3 fol = seasonTint(gFoliage * (0.75 + 0.45 * shade), 0.07, 0.0);
+            fol = mix(fol, seasonTint(gFoliage, 0.10, 0.4), step(0.75, shade) * gAutumn);
+            float depthShade = mix(0.72, 1.0, dots) * (0.78 + 0.35 * smoothstep(0.3, 0.7, c0));          // the solid core sits behind the edge leaves
+            vec3 fc = fol * (skyAmb * (1.0 - under * 0.40) * 1.45 + gSunLight * lit * 1.0) * depthShade;
+            col = mix(col, fc, mass);
+            cov = max(cov, mass);
+        }
+    }
+    return vec4(col, cov);
 }
 
 // ------------------------------------------------------------------ main ---
@@ -521,9 +834,29 @@ void main() {
     gStorm = max(wxStorm, wxRain * 0.6);
     gCover = clamp(wxCloud, 0.0, 1.0);
     gGloom = clamp(wxCloud * 0.30 + gStorm * 0.45 + wxFog * 0.25, 0.0, 0.8);
-    gDrift = time * (0.004 + wxWind * 0.035);
+    gDrift = time * (0.004 + pow(wxWind, 1.2) * 0.08);
     gCold = clamp((6.0 - wxTemp) / 14.0, 0.0, 1.0);
     gAccHsv = rgb2hsv(accentColor.rgb);
+
+    // ---- season and wind ----
+    float sN = fract(season);
+    gSpring = smoothstep(0.25, 0.33, sN) * (1.0 - smoothstep(0.42, 0.50, sN));
+    gLeaf = smoothstep(0.30, 0.42, sN) * (1.0 - smoothstep(0.80, 0.905, sN));
+    gAutumn = smoothstep(0.66, 0.80, sN) * (1.0 - smoothstep(0.93, 0.98, sN));
+    gFallRate = smoothstep(0.72, 0.80, sN) * (1.0 - smoothstep(0.87, 0.92, sN));
+    gDry = max(smoothstep(0.68, 0.88, sN), 1.0 - smoothstep(0.22, 0.33, sN));
+    gFlowers = smoothstep(0.36, 0.42, sN) * (1.0 - smoothstep(0.62, 0.70, sN)) * smoothstep(6.0, 12.0, wxTemp);
+    // Grass shrinks and browns with frost and is gone by -15.
+    gGrassAmt = smoothstep(-15.0, -6.0, wxTemp);
+    gGrassH = mix(0.35, 1.0, smoothstep(-15.0, 3.0, wxTemp)) * (1.0 - clamp(wxSnow * 1.1, 0.0, 1.0) * 0.7);
+    gDry = max(gDry, 1.0 - smoothstep(-8.0, 2.0, wxTemp));
+    gWindS = pow(clamp(wxWind, 0.0, 1.0), 0.8);
+    gWindDir = 1.0;
+    // Plants lean on the theme, with a share of natural green so they read as
+    // plants on any palette.
+    vec3 natural = vec3(0.30, 0.42, 0.20);
+    gGrassCol = mix(mix(mutedColor.rgb, accentColor.rgb, 0.55), natural * (0.6 + luma(accentColor.rgb)), 0.30);
+    gFoliage = mix(mix(accentColor.rgb, mutedColor.rgb, 0.25), natural * (0.6 + luma(accentColor.rgb)), 0.35);
 
     // ---- palette, all from the theme ----
     // Sky hue follows the accent; the pale horizon leans toward the text colour.
@@ -615,10 +948,17 @@ void main() {
         float z = 1.0 / (dl + 0.012);
         vec2 wv = vec2(p.x * z * 0.9, z * 2.2);
         float t = time * (0.35 + wxWind * 1.2);
-        float rough = 0.25 + wxWind * 1.3 + wxRain * 0.6;
+        float rough = 0.25 + gWindS * 2.2 + wxRain * 0.6;
         float nx = fbm3(wv * vec2(1.0, 0.35) + vec2(t * 0.3, t)) - 0.5;
         float ny = fbm3(wv * vec2(0.8, 0.30) + vec2(-t * 0.2, t * 0.8 + 5.0)) - 0.5;
         vec2 ripple = vec2(nx * 0.010, ny * 0.006) * rough * (0.35 + dl * 9.0);
+        // A hard wind chops the whole surface: short, steep wind waves that
+        // shatter the reflection, even far out.
+        if (gWindS > 0.3) {
+            vec2 cw = vec2(p.x * z * 2.6 - time * 1.4 * gWindDir, z * 7.0 + time * 0.5);
+            vec2 chop = vec2(fbm3(cw), fbm3(cw + vec2(5.2, 1.3))) - 0.5;
+            ripple += chop * vec2(0.020, 0.030) * smoothstep(0.3, 1.0, gWindS) * (0.6 + dl * 6.0);
+        }
 
         // Rain rings on the surface.
         if (wxRain > 0.01) {
@@ -655,6 +995,13 @@ void main() {
             float bright = gIsDay ? 0.9 : 0.5 * (0.5 - 0.5 * cos(moonPhase * 2.0 * PI));
             col += gBodyCol * path * (0.25 + spark) * bright * (1.0 - gGloom * 0.8) * (0.3 + rough * 0.4);
         }
+        // Whitecaps when it blows hard: breaking crests streaked by the wind.
+        if (gWindS > 0.35) {
+            vec2 cq = vec2(p.x * z * 2.2 - time * 0.9 * gWindDir, z * 5.0 + time * 0.3);
+            float crest = smoothstep(0.72, 0.9, fbm3(cq + vec2(0.0, fbm3(cq * 0.5) * 0.8)));
+            float caps = crest * smoothstep(0.35, 0.9, gWindS) * smoothstep(0.0, 0.06, dl);
+            col = mix(col, mix(fgColor.rgb, gSkyLow, 0.4) * (0.5 + 0.5 * gDaylight), caps * 0.55);
+        }
         // Lake mist on still mornings and fog.
         float mist = (0.10 + wxFog * 0.6 + (gIsDay ? smoothstep(0.18, 0.0, sunPhase) * 0.4 : 0.0))
                    * exp(-dl * 22.0) * (0.5 + fbm3(vec2(p.x * 3.0 - time * 0.02, dl * 50.0)));
@@ -664,99 +1011,121 @@ void main() {
         col = vec3(0.0);   // shore, painted below
     }
 
-    // ---- the meadow on the near shore ----
-    // Six bands of grass from the waterline to the bottom edge: far bands are
-    // fine, short and hazed; near ones are tall, coarse and soft-edged (out of
-    // focus). Gusts roll across as waves of lean; flowers on warm days, reeds
-    // at the water, and snow burying it all in winter.
-    if (p.y > shoreY - 0.14) {
-        float snowG = clamp(wxSnow * 1.2 + gCold * 0.3 - 0.15, 0.0, 1.0);
-        vec3 grassCol = mix(mutedColor.rgb, accentColor.rgb, 0.55);
+    // ---- the meadow: every blade a particle on the ground plane ----
+    // Blades are scattered in world space (x along the shore, depth z) and
+    // projected: y = WL + CAM_H / z. Each has its own jittered depth, height,
+    // shade and a curved spine bent by the local wind, so there are no rows
+    // or outlines. Rows rooted below the frame give tall, out-of-focus blades
+    // across the bottom.
+    if (p.y > shoreY - 0.16) {
+        const float CAM_H = 0.03;
+        const float BLADE_H = 0.0050;
+        const float CELL_W = 0.00072;
+        const int ROWS = 36;
+        float invFar = (shoreY - WL) / CAM_H;
+        float invNear = (0.53 - WL) / CAM_H;
+        float invMax = invNear * 2.4;
+        float rowStep = (invMax - invFar) / float(ROWS - 1);
         vec3 airCol = mix(gSkyLow, gSkyTop, 0.3);
+        vec3 skyAmb = mix(gSkyTop, gSkyLow, 0.5);
         float bodyStr = gIsDay ? gDaylight * (1.0 - gGloom * 0.7) : 0.2 * (1.0 - gGloom);
-        // Low sun behind the grass shines through the blades.
         float backlight = gTwilight * (1.0 - gGloom) + (gIsDay ? 0.25 * gDaylight : 0.0);
-        bool warm = wxTemp > 8.0 && wxSnow < 0.05;
+        float snowG = clamp(wxSnow * 1.2 + gCold * 0.3 - 0.15, 0.0, 1.0);
+        float frost = smoothstep(0.0, -6.0, wxTemp) * (1.0 - snowG);
+        float pix = 1.0 / 1440.0;
 
-        for (int l = 0; l < 6; l++) {
-            float fl = float(l) / 5.0;
-            float yl = shoreY + (0.535 - shoreY) * pow(fl, 1.5);
-            float dens = mix(620.0, 60.0, pow(fl, 0.65));
-            float hMax = mix(0.010, 0.10, pow(fl, 1.35)) * (1.0 - snowG * 0.65);
-            float haze = (1.0 - fl) * 0.30;
-            float aa = 0.0006 * (1.0 + fl * fl * 5.0);
+        // Ground under the grass: sod in summer, litter in autumn, frost, snow.
+        if (p.y >= shoreY) {
+            float invZ = (p.y - WL) / CAM_H;
+            vec3 sod = seasonTint(gGrassCol, 0.10, gDry) * 0.30;
+            sod *= 0.7 + 0.6 * fbm3(vec2(p.x / invZ * 900.0, invZ * 3.0));
+            sod *= skyAmb * 1.2 + gSunLight * bodyStr * 0.4;
+            sod = mix(sod, mix(fgColor.rgb, gSkyLow, 0.4) * 0.6, frost * 0.5);
+            sod = mix(sod, mix(fgColor.rgb, gSkyLow, 0.35) * (0.35 + 0.55 * gDaylight) * (0.85 + 0.15 * fbm3(p * 40.0)), snowG);
+            float haze = smoothstep(invFar * 1.8, invFar, invZ) * 0.3;
+            col = mix(sod, airCol * 0.5, haze);
+        }
 
-            // The ground of this band.
-            if (p.y >= yl) {
-                vec3 soil = mix(bgColor.rgb * 0.28, grassCol * 0.22, 0.5) * (0.75 + 0.5 * fbm3(p * vec2(50.0, 110.0)));
-                soil += gSkyLow * 0.04;
-                soil = mix(soil, mix(fgColor.rgb, gSkyLow, 0.35) * (0.35 + 0.55 * gDaylight) * (0.85 + 0.15 * fbm3(p * 40.0)), snowG);
-                col = mix(soil, airCol * 0.5, haze);
-            }
+        if (gGrassAmt > 0.01) {
+            for (int r = 0; r < ROWS; r++) {
+                float rowInv = invFar + float(r) * rowStep;
+                float rowY = WL + CAM_H * rowInv;
+                float hbMax = BLADE_H * rowInv * 1.6 * gGrassH;
+                if (p.y > rowY + CAM_H * rowStep * 0.6 || p.y < rowY - hbMax) continue;
+                float X = p.x / rowInv;
+                float c0 = floor(X / CELL_W);
+                for (int k = -3; k <= 3; k++) {
+                    float cell = c0 + float(k);
+                    float seedB = cell * 1.37 + float(r) * 57.13;
+                    float h = hash1(seedB);
+                    // Clumps and bare patches, and fewer blades in the cold.
+                    float clump = vnoise(vec2(cell * 0.045, float(r) * 0.7));
+                    if (h > (0.35 + 0.75 * clump) * gGrassAmt) continue;
+                    float inv = rowInv + (hash1(seedB + 1.9) - 0.5) * rowStep;
+                    float rootX = (cell + hash1(seedB + 5.3)) * CELL_W;
+                    float rx = rootX * inv;
+                    float ry = WL + CAM_H * inv;
+                    float hb = BLADE_H * inv * (0.45 + 0.9 * hash1(seedB + 2.1)) * (0.55 + 0.7 * clump) * gGrassH;
+                    // Wind: gust fronts roll across in world space; strong wind
+                    // lays the blades over and makes them thrash.
+                    float gust = fbm3(vec2(rootX * 5.0 - time * (0.35 + 2.2 * gWindS), inv * 0.35));
+                    float lean = gWindDir * (0.08 + 1.35 * gWindS * (0.35 + 1.0 * gust))
+                               + (h - 0.5) * 0.45
+                               + sin(time * (1.4 + 9.0 * gWindS) + seedB * 6.0) * (0.03 + 0.16 * gWindS);
+                    lean = clamp(lean, -1.4, 1.4);
+                    float vy = hb * max(1.0 - 0.38 * lean * lean, 0.28);
+                    float t = (ry - p.y) / vy;
+                    if (t < 0.0 || t > 1.0) continue;
+                    float cx = rx + lean * hb * 0.18;
+                    float tx = rx + lean * hb * 0.95;
+                    float bx = (1.0 - t) * (1.0 - t) * rx + 2.0 * (1.0 - t) * t * cx + t * t * tx;
+                    float dxdt = 2.0 * (1.0 - t) * (cx - rx) + 2.0 * t * (tx - cx);
+                    float slope = dxdt / vy;
+                    float d = abs(p.x - bx) / sqrt(1.0 + slope * slope);
+                    float w = 0.00045 * inv * pow(1.0 - t, 0.85);
+                    float blur = max(inv - invNear * 0.95, 0.0) * 0.00018;
+                    float aa = pix * 0.8 + blur;
+                    float m = smoothstep(w + aa, max(w - aa * 0.3, 0.0), d) * clamp(w * 2.5 / aa + 0.35, 0.0, 1.0);
+                    if (m <= 0.0) continue;
 
-            // Blades rooted along this band.
-            float cell0 = floor(p.x * dens);
-            for (int kk = -1; kk <= 1; kk++) {
-                float cell = cell0 + float(kk);
-                float seedB = cell * 1.37 + float(l) * 31.7;
-                float h = hash1(seedB);
-                float clump = vnoise(vec2(cell * 0.09, float(l) * 5.0));
-                float bh = hMax * (0.30 + 0.70 * hash1(seedB + 2.1)) * (0.55 + 0.9 * clump);
-                if (l <= 1 && hash1(seedB + 9.0) > 0.94) bh *= 3.2;       // reeds by the water
-                float root = (cell + hash1(seedB + 5.3)) / dens;
-                float t = (yl + 0.003 - p.y) / bh;
-                if (t < 0.0 || t > 1.0) continue;
-                float gust = fbm3(vec2(root * 0.8 - time * (0.22 + wxWind * 0.8), float(l) * 2.0));
-                float lean = (0.10 + wxWind * 1.0) * (0.35 + gust * 1.1)
-                           + (h - 0.5) * 0.35
-                           + sin(time * (1.4 + h) + root * 9.0) * 0.04 * (0.3 + wxWind);
-                float bx = root + lean * bh * t * t * 1.2;
-                float w = pow(1.0 - t, 0.9) * 0.60 / dens;
-                float m = smoothstep(w + aa, max(w - aa * 0.4, 0.0), abs(p.x - bx));
-                if (m <= 0.0) continue;
-                // Each blade its own shade and a slight turn of hue: some dry, some lush.
-                vec3 bh3 = rgb2hsv(grassCol);
-                bh3.x = fract(bh3.x + (hash1(seedB + 7.7) - 0.5) * 0.06);
-                bh3.y *= 0.7 + 0.5 * hash1(seedB + 8.8);
-                vec3 bc = hsv2rgb(bh3) * (0.5 + 0.65 * hash1(seedB + 3.3));
-                // Midrib: blades are lighter down their spine.
-                bc *= 0.85 + 0.25 * smoothstep(w, 0.0, abs(p.x - bx));
-                bc = mix(bc * 0.25, bc, t);
-                bc *= mix(gSkyTop, gSkyLow, 0.5) * 1.3 + gSunLight * bodyStr * 0.7;
-                bc += gSunLight * grassCol * backlight * t * t * 0.9;
-                bc = mix(bc, mix(fgColor.rgb, gSkyLow, 0.35) * (0.4 + 0.5 * gDaylight), snowG * smoothstep(0.4, 1.0, t) * 0.8);
-                bc = mix(bc, airCol * 0.55, haze);
-                col = mix(col, bc, m);
-            }
+                    // Colour: each blade its own shade; some already turned or dead.
+                    float ownDry = clamp(gDry + (hash1(seedB + 4.4) - 0.6) * 0.5 * (gDry + gAutumn), 0.0, 1.0);
+                    vec3 base = gGrassCol * (0.55 + 0.6 * hash1(seedB + 3.3));
+                    vec3 bh3 = rgb2hsv(base);
+                    bh3.x = hueMix(bh3.x, bh3.x + (hash1(seedB + 7.7) - 0.5) * 0.08, 1.0);
+                    vec3 bc = seasonTint(hsv2rgb(bh3), 0.11, ownDry);
+                    bc = mix(bc * 0.25, bc, t);                         // dark at the root
+                    bc *= 0.85 + 0.25 * smoothstep(w, 0.0, d);          // lighter spine
+                    bc *= skyAmb * 1.3 + gSunLight * bodyStr * 0.7;
+                    bc += gSunLight * bc * backlight * t * t * 1.4;     // low sun through the tips
+                    // Laid-over blades show their pale undersides: gusts read as sheen.
+                    bc += mix(fgColor.rgb, skyAmb, 0.5) * smoothstep(0.45, 1.2, abs(lean)) * t * 0.22 * (0.4 + gDaylight);
+                    bc = mix(bc, mix(fgColor.rgb, gSkyLow, 0.35) * (0.45 + 0.5 * gDaylight), (snowG * 0.8 + frost * 0.6) * smoothstep(0.35, 1.0, t));
+                    float haze = smoothstep(invFar * 1.8, invFar, inv) * 0.3;
+                    bc = mix(bc, airCol * 0.55, haze);
+                    col = mix(col, bc, m);
 
-            // Flowers on warm days, in the middle bands.
-            if (warm && l >= 2 && l <= 4) {
-                float fd = dens * 0.35;
-                float fc = floor(p.x * fd);
-                float fh = hash1(fc * 3.7 + float(l) * 11.0);
-                if (fh > 0.90) {
-                    float fx = (fc + 0.5) / fd;
-                    float stemH = hMax * (0.6 + 0.5 * hash1(fc + float(l)));
-                    float fy = yl - stemH;
-                    float sway = (0.10 + wxWind) * 0.010 * (0.5 + fbm3(vec2(fx * 0.8 - time * 0.3, 1.0)));
-                    float tS = clamp((yl - p.y) / stemH, 0.0, 1.0);
-                    float stemX = fx + sway * tS * tS;
-                    float stem = step(p.y, yl) * step(fy, p.y) * smoothstep(0.0009 * (1.0 + fl * 2.0), 0.0, abs(p.x - stemX));
-                    float r = 0.0016 * (1.0 + fl * 2.2);
-                    vec2 dq = vec2(p.x - fx - sway, (p.y - fy) * 1.4);
-                    // A few petals round a darker eye.
-                    float ang = atan(dq.y, dq.x);
-                    float petals = r * (0.75 + 0.25 * cos(ang * 5.0 + fh * 20.0));
-                    float d = length(dq);
-                    vec3 fcol = hsv2rgb(vec3(fract(gAccHsv.x + (hash1(fc * 9.1) - 0.5) * 0.45 + 0.5),
-                                             0.38, 0.80)) * (0.35 + 0.55 * (gDaylight + gTwilight * 0.5));
-                    vec3 stemCol = grassCol * 0.35 * (mix(gSkyTop, gSkyLow, 0.5) * 1.3);
-                    col = mix(col, mix(stemCol, airCol * 0.55, haze), stem);
-                    float head = smoothstep(petals, petals * 0.7, d);
-                    vec3 fc3 = mix(fcol, fcol * 0.35, smoothstep(r * 0.35, 0.0, d));
-                    col = mix(col, mix(fc3, airCol * 0.55, haze), head);
+                    // Flowers on some blades in late spring and summer.
+                    if (gFlowers > 0.01 && hash1(seedB + 8.8) > 1.0 - 0.035 * gFlowers) {
+                        float r0 = 0.0011 * inv;
+                        vec2 dq = vec2(p.x - tx, (p.y - (ry - vy)) * 1.3);
+                        float an = atan(dq.y, dq.x);
+                        float pet = r0 * (0.75 + 0.25 * cos(an * 5.0 + seedB));
+                        float fd = length(dq);
+                        vec3 fcol = hsv2rgb(vec3(fract(gAccHsv.x + (hash1(seedB * 9.1) - 0.5) * 0.45 + 0.5), 0.40, 0.85))
+                                  * (skyAmb * 1.2 + gSunLight * bodyStr * 0.6);
+                        fcol = mix(fcol, fcol * 0.35, smoothstep(r0 * 0.35, 0.0, fd));
+                        col = mix(col, mix(fcol, airCol * 0.55, haze), smoothstep(pet + aa, pet - aa * 0.5, fd));
+                    }
                 }
             }
+        }
+
+        // Hoarfrost glints on the bare, frozen meadow.
+        if (frost > 0.01 && p.y > shoreY) {
+            vec2 gq = p * vec2(420.0, 900.0);
+            float g = pow(vnoise(gq), 22.0) * 3.0;
+            col += fgColor.rgb * g * frost * (0.3 + 0.7 * gDaylight);
         }
     }
 
@@ -802,7 +1171,7 @@ void main() {
     }
 
     // ---- precipitation behind the tree ----
-    float slant = 2.0 + wxWind * 14.0;
+    float slant = 2.0 + gWindS * 30.0;
     vec3 rainCol = mix(mutedColor.rgb, fgColor.rgb, 0.45) * (0.55 + 0.45 * gDaylight);
     vec3 snowCol = fgColor.rgb * 1.05;
     if (wxRain > 0.01) {
@@ -857,27 +1226,47 @@ void main() {
     col += rimCol * edge * (0.45 + 0.55 * litSide) * edgeGlowBrightness;
     col = mix(col, snowCol * (0.55 + 0.45 * gDaylight), snowCap * 0.9);
 
-    // ---- framing spruces ----
-    float snA, snB, snC, snD, egA, egB, egC, egD;
-    float sA1 = spruce(p, -gHalfW + 0.10, -0.34, 0.20, 1.0, snA, egA);
-    float sA2 = spruce(p, -gHalfW + 0.36, -0.06, 0.12, 2.0, snB, egB);
-    float sB1 = spruce(p, gHalfW - 0.14, -0.40, 0.22, 3.0, snC, egC);
-    float sB2 = spruce(p, gHalfW - 0.42, 0.02, 0.10, 4.0, snD, egD);
-    float trees = max(max(sA1, sA2), max(sB1, sB2));
-    if (trees > 0.0) {
-        vec3 bark = mix(bgColor.rgb * 0.12, mix(mutedColor.rgb, accentColor.rgb, 0.3) * 0.12, 0.4);
-        bark *= 0.8 + 0.4 * vnoise(p * vec2(300.0, 500.0));
-        bark += gSkyLow * 0.04 + gDusk * gTwilight * 0.03;
-        // Rim light on the outline: sky all round, the sun or moon on its side.
-        float edge = max(max(abs(egA), abs(egB)), max(abs(egC), abs(egD)));
-        float edgeS = egA + egB + egC + egD;
-        float toward = clamp(sign(edgeS) * sign(gBody.x - p.x), 0.0, 1.0);
-        float bodyStr = gIsDay ? gDaylight * (1.0 - gGloom * 0.7) : 0.3 * (1.0 - gGloom);
-        bark += gSkyLow * edge * 0.10 + gSunLight * edge * toward * 0.35 * bodyStr;
-        float snowTop = max(max(snA, snB), max(snC, snD));
-        float snowT = clamp(wxSnow * 1.3 + gCold * 0.2 - 0.1, 0.0, 1.0);
-        bark = mix(bark, mix(fgColor.rgb, gSkyLow, 0.4) * (0.35 + 0.5 * gDaylight), snowTop * snowT * 0.9);
-        col = mix(col, bark, trees);
+    // ---- framing trees: birch on the left, oak on the right ----
+    vec4 tB = birch(p, -gHalfW + 0.20, -0.44, 1.0);
+    col = mix(col, tB.rgb, tB.a);
+    vec4 tB2 = birch(p, -gHalfW + 0.46, -0.16, 5.0);
+    col = mix(col, tB2.rgb, tB2.a * (1.0 - tB.a));
+    vec4 tO = oak(p, gHalfW - 0.44, 3.0);
+    col = mix(col, tO.rgb, tO.a);
+
+    // ---- leaves in the air ----
+    // Falling in autumn, torn off and blown sideways in a strong wind.
+    float airLeaves = gFallRate * (0.25 + 0.9 * gWindS) + pow(gWindS, 2.0) * 0.35 * gLeaf;
+    if (airLeaves > 0.005) {
+        for (int layer = 0; layer < 3; layer++) {
+            float fl = float(layer);
+            float scale = layer == 0 ? 34.0 : (layer == 1 ? 20.0 : 10.0);
+            vec2 q = p * scale;
+            float drift = time * (0.25 + 4.5 * gWindS) * gWindDir * (0.8 + fl * 0.35);
+            float fall = time * (0.45 + fl * 0.2) * (1.0 - 0.55 * gWindS);
+            q += vec2(-drift, -fall);
+            vec2 base = floor(q);
+            for (int oy = -1; oy <= 1; oy++) {
+                for (int ox = -1; ox <= 1; ox++) {
+                    vec2 cell = base + vec2(float(ox), float(oy));
+                    float h = hash21(cell + 17.0 + fl * 7.0);
+                    if (h > airLeaves * (0.18 - fl * 0.04)) continue;
+                    vec2 ctr = cell + 0.5 + (vec2(hash21(cell + 3.3), hash21(cell + 7.7)) - 0.5) * 0.7
+                             + vec2(sin(time * (1.2 + h * 3.0) + h * 40.0) * 0.35, cos(time * (0.9 + h * 2.0) + h * 20.0) * 0.2);
+                    vec2 lq = rot2(q - ctr, time * (1.5 + 4.0 * h + 3.0 * gWindS) + h * 6.0);
+                    float flip = abs(cos(time * (2.0 + 3.0 * h) + h * 9.0));
+                    float size = 0.11 + 0.05 * hash21(cell + 11.0);
+                    float d = length(lq / vec2(size, size * (0.12 + 0.45 * flip)));
+                    float m = smoothstep(1.0, 0.7, d);
+                    if (m <= 0.0) continue;
+                    float pick = hash21(cell + 23.0);
+                    vec3 lc = seasonTint(gFoliage, pick < 0.5 ? 0.13 : 0.06, 0.0);
+                    lc = mix(lc, seasonTint(gFoliage, 0.07, 0.6), step(0.85, pick));
+                    lc *= mix(gSkyTop, gSkyLow, 0.5) * 1.2 + gSunLight * (gIsDay ? gDaylight : 0.1) * 0.7;
+                    col = mix(col, lc, m * (layer == 2 ? 0.85 : 1.0));
+                }
+            }
+        }
     }
 
     // ---- precipitation in front of everything ----
@@ -893,7 +1282,7 @@ void main() {
         }
     }
     if (wxSnow > 0.01) {
-        float windX = wxWind * 1.4;
+        float windX = gWindS * 4.5;
         float s = 0.0;
         for (int layer = 0; layer < 3; layer++) {
             float scale = layer == 0 ? 40.0 : (layer == 1 ? 24.0 : 11.0);

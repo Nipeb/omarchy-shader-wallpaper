@@ -106,6 +106,9 @@ Item {
   property real testPhase: -1
   property real testWind: -1
   property real testTemp: -999
+  property real testSeason: -1
+  // Fraction of the year (0 = 1 Jan), for seasonal grass and leaves.
+  property real wxSeason: 0.5
   property real audioLevel: 0
   property real audioPeak: 0
   property real audioBass: 0
@@ -225,6 +228,12 @@ Item {
       else { var prevSet = set - 86400; ph = 1 + (now - prevSet) / (rise - prevSet) }
       wxSunPhase = Math.max(0, Math.min(1.999, ph))
     }
+    if (testSeason >= 0) {
+      wxSeason = testSeason
+    } else {
+      var d0 = new Date(); var jan1 = new Date(d0.getFullYear(), 0, 1)
+      wxSeason = ((d0 - jan1) / 86400000) / 365.25
+    }
     // Moon: days since a known new moon, over the synodic month.
     var synodic = 29.530588853 * 86400
     var ph2 = ((now - 947182440) / synodic) % 1
@@ -233,7 +242,7 @@ Item {
 
   function setTesting(on) {
     testingEnabled = on
-    if (!on) { testCode = -1; testPhase = -1; testWind = -1; testTemp = -999 }
+    if (!on) { testCode = -1; testPhase = -1; testWind = -1; testTemp = -999; testSeason = -1 }
     recomputeWeather()
   }
 
@@ -248,6 +257,7 @@ Item {
     else if (kind === "phase") testPhase = value
     else if (kind === "wind") testWind = value
     else if (kind === "temp") testTemp = value
+    else if (kind === "season") testSeason = value
     recomputeWeather()
   }
 
@@ -895,6 +905,7 @@ Item {
         property real wxStorm: root.wxStormN
         property real wxWind: root.wxWindN
         property real wxTemp: root.wxTempN
+        property real season: root.wxSeason
         property real flashTime: root.flashTime
         property real iconWarpScale: root.cfgIconWarpScale
         property real edgeGlowWidth: root.cfgEdgeGlowWidth
@@ -1079,6 +1090,7 @@ Item {
               function f(v) { return Number(v).toFixed(2) }
               text: "sun " + f(root.wxSunPhase) + "  cloud " + f(root.wxCloudN) + "  rain " + f(root.wxRainN)
                   + "  snow " + f(root.wxSnowN) + "  wind " + f(root.wxWindN) + "  " + Math.round(root.wxTempN) + "°"
+                  + "  season " + f(root.wxSeason)
               color: Color.foreground
               opacity: 0.7
               font.pixelSize: 11
@@ -1093,7 +1105,8 @@ Item {
               { kind: "phase", items: [["Live", -1], ["Sunrise", 0.03], ["Morning", 0.2], ["Noon", 0.5], ["Afternoon", 0.75],
                                        ["Sunset", 0.97], ["Dusk", 1.04], ["Night", 1.5], ["Pre-dawn", 1.95]] },
               { kind: "wind", items: [["Live", -1], ["Calm", 0.0], ["Breeze", 0.25], ["Windy", 0.55], ["Gale", 0.95]] },
-              { kind: "temp", items: [["Live", -999], ["-15°", -15], ["-3°", -3], ["5°", 5], ["14°", 14], ["24°", 24]] }
+              { kind: "temp", items: [["Live", -999], ["-15°", -15], ["-3°", -3], ["5°", 5], ["14°", 14], ["24°", 24]] },
+              { kind: "season", items: [["Live", -1], ["Spring", 0.36], ["Summer", 0.56], ["Autumn", 0.75], ["Late autumn", 0.86], ["Winter", 0.04]] }
             ]
 
             Row {
@@ -1117,7 +1130,7 @@ Item {
                   required property var modelData
                   property string kind: testRow.modelData.kind
                   property real current: kind === "code" ? root.testCode : kind === "phase" ? root.testPhase
-                                       : kind === "wind" ? root.testWind : root.testTemp
+                                       : kind === "wind" ? root.testWind : kind === "season" ? root.testSeason : root.testTemp
                   property bool active: Math.abs(current - modelData[1]) < 0.001
                   width: label.implicitWidth + 14
                   height: 22
