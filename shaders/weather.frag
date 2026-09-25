@@ -1353,6 +1353,71 @@ float birdShape(vec2 p, vec2 c, float span, float beat, float glide, float dir, 
     return best;
 }
 
+// A bird of prey seen from below-front, with the controls a soaring bird
+// actually uses: `roll` banks the whole silhouette into a turn; `flapAmt`
+// blends from a soaring glide into deep wingbeats; `tuck` sweeps the hands
+// in for a fast glide or a stoop; `flex` is the constant small trimming of
+// the wingtips in moving air; `fan` spreads the tail in slow, tight turns
+// and `twist` turns it against the bank.
+float raptorShape(vec2 p, vec2 c, float span, float roll, float beat, float flapAmt,
+                  float tuck, float flex, float fan, float twist, float dir) {
+    vec2 q = rot2((p - c) / span, -roll);
+    if (dot(q, q) > 2.4) return 0.0;
+    float px = 1.0 / (span * 1440.0);
+    float flapW = sin(beat), flapT = sin(beat - 0.9);
+    // Soaring: a shallow V with the hands lifted; flapping: full strokes.
+    float wristY = mix(-0.16 + flex * 0.05, -0.36 * flapW - 0.06, flapAmt) + tuck * 0.05;
+    float tipY = mix(-0.14 + flex * 0.14, -0.62 * flapT + 0.05, flapAmt) + tuck * 0.20;
+    float reach = mix(1.0, 0.60, tuck);
+    float best = 0.0;
+    for (int sd = 0; sd < 2; sd++) {
+        float side = sd == 0 ? -1.0 : 1.0;
+        // The wing on the inside of the turn sits a little lower.
+        float own = -side * roll * 0.12;
+        vec2 sh = vec2(side * 0.07, 0.0);
+        vec2 wr = vec2(side * mix(0.44, 0.38, tuck), wristY + own);
+        vec2 tp = vec2(side * reach, tipY + own * 1.6);
+        vec2 c1 = vec2(side * 0.24, wr.y * 0.4 - 0.10);
+        vec2 c2 = vec2(side * mix(0.74, 0.50, tuck), mix(wr.y, tp.y, 0.3) - 0.04);
+        vec2 prev = sh;
+        for (int s2 = 1; s2 <= 8; s2++) {
+            float t = float(s2) / 8.0;
+            vec2 cur = t <= 0.5 ? qbez(sh, c1, wr, t * 2.0) : qbez(wr, c2, tp, t * 2.0 - 1.0);
+            float h;
+            float d = segD(q, prev, cur, h);
+            float along = (float(s2 - 1) + h) / 8.0;
+            // Broad wings: a long trailing edge down to the fingered hand.
+            float w = 0.14 * (1.0 - along * 0.50);
+            best = max(best, smoothstep(w + px, w - px * 0.5, d));
+            prev = cur;
+        }
+        // Primaries: spread and curling up while soaring, closed when tucked,
+        // each one trembling on its own.
+        float spread = mix(0.045, 0.012, tuck) * (0.8 + 0.4 * (1.0 - flapAmt));
+        for (int fi = 0; fi < 5; fi++) {
+            float ff = float(fi);
+            vec2 base = tp - vec2(side * 0.10, 0.0) + vec2(0.0, ff * spread);
+            float curl = (1.0 - flapAmt) * (1.0 - tuck) * (0.05 + 0.04 * flex);
+            vec2 fend = base + vec2(side * (0.17 - ff * 0.012) * (1.0 - tuck * 0.5),
+                                    -0.03 + ff * spread * 0.8 - curl + sin(time * (7.0 + ff * 1.9) + ff + side) * 0.012);
+            float h;
+            float d = segD(q, base, fend, h);
+            float fw = 0.028 * (1.0 - h * 0.5);
+            best = max(best, smoothstep(fw + px, fw - px * 0.5, d));
+        }
+    }
+    // Body, head turned toward the direction of travel, and a fanned tail.
+    vec2 bq = q * vec2(dir, 1.0);
+    float body = length((bq - vec2(0.02, 0.03)) / vec2(0.22, 0.085));
+    float head = length((bq - vec2(0.23, -0.01)) / vec2(0.075, 0.065));
+    vec2 tq = rot2(bq - vec2(-0.24, 0.05), twist);
+    float tailW = mix(0.09, 0.17, fan);
+    float tail = length(tq / vec2(0.13, tailW)) ;
+    tail = max(tail, (-tq.x - 0.02) / 0.12 + 0.0);             // square-ish end
+    best = max(best, smoothstep(1.0 + px * 6.0, 1.0 - px * 3.0, min(min(body, head), tail)));
+    return best;
+}
+
 // ------------------------------------------------------------------ main ---
 
 void main() {
@@ -1913,14 +1978,43 @@ void main() {
         // A buzzard or eagle, soaring in wide circles on still, clear days.
         float raptorDay = max(smoothstep(0.35, 0.7, vnoise(vec2(time / 600.0, 9.0))) * (1.0 - gCover) * (1.0 - gWindS * 0.6), eggBirds);
         if (raptorDay > 0.05) {
-            float a = time * 0.11;
-            vec2 rc = vec2(-gHalfW * 0.45 + sin(time * 0.013) * 0.3, -0.26);
-            vec2 rp = rc + vec2(cos(a) * 0.22, sin(a) * 0.045);
-            float rdir = -sin(a) >= 0.0 ? 1.0 : -1.0;
-            if (length(p - rp) < 0.08) {
-                float beat = time * 4.0;
-                float glide = 1.0 - smoothstep(0.93, 1.0, sin(time * 0.21) * 0.5 + 0.5);
-                birds = max(birds, birdShape(p, rp, 0.030, beat, glide, rdir, 1.0) * raptorDay);
+            // A 70 s cycle: circle in a thermal and climb, flap a few times,
+            // then glide out to the next one losing the height again -- on
+            // some cycles folding into a stoop and pulling out of it.
+            const float T = 70.0;
+            float cyc = floor(time / T);
+            float ph = fract(time / T);
+            float circ = smoothstep(0.0, 0.06, ph) * smoothstep(0.64, 0.56, ph) + smoothstep(0.96, 1.0, ph);
+            float transit = smoothstep(0.62, 0.95, ph);
+            float climb = smoothstep(0.0, 0.62, ph) - smoothstep(0.62, 0.97, ph);
+            float stoopOn = step(0.6, hash1(cyc * 4.7 + 1.0));
+            float stoopT = clamp((ph - 0.74) / 0.14, 0.0, 1.0);
+            float stoop = stoopOn * sin(PI * stoopT);
+            // Moving from thermal to thermal across the sky, bouncing off
+            // the frame's ends so it never jumps.
+            float R = gHalfW * 1.5;
+            float u = hash1(7.3) * R + 0.55 * (cyc + transit);
+            float m = mod(u, 2.0 * R);
+            float cx = (m < R ? m : 2.0 * R - m) - R * 0.5;
+            float tDir = m < R ? 1.0 : -1.0;
+            float a = time * 0.34 + hash1(cyc) * 6.28;
+            vec2 rp = vec2(cx, -0.19 - 0.11 * climb + 0.10 * stoop * stoop)
+                    + vec2(cos(a) * 0.15, sin(a) * 0.035) * circ
+                    + vec2((fbm3(vec2(time * 0.3, 2.0)) - 0.5) * 0.01, (fbm3(vec2(time * 0.35, 5.0)) - 0.5) * 0.008);
+            float rdir = mix(-sin(a) >= 0.0 ? 1.0 : -1.0, tDir, step(0.5, 1.0 - circ));
+            float span = 0.033 * (1.0 - 0.22 * climb);
+            if (length(p - rp) < span * 1.6) {
+                // Bank into the turn, plus gust wobble.
+                float roll = circ * 0.40 * cos(a) + (fbm3(vec2(time * 0.9, 1.0)) - 0.5) * 0.16;
+                // A few wingbeats leaving the thermal, and now and then mid-circle.
+                float burstSlot = floor(time / 9.0);
+                float burst = step(0.72, hash1(burstSlot * 3.3)) * smoothstep(0.0, 0.05, fract(time / 9.0)) * smoothstep(0.26, 0.2, fract(time / 9.0));
+                float flapAmt = max(smoothstep(0.60, 0.625, ph) * smoothstep(0.70, 0.67, ph), burst);
+                float tuck = max(0.45 * smoothstep(0.70, 0.78, ph) * smoothstep(0.94, 0.86, ph), 0.95 * stoop);
+                float flex = fbm3(vec2(time * 1.6, 3.0)) - 0.5 + (fbm3(vec2(time * 4.0, 7.0)) - 0.5) * 0.5;
+                float fan = circ * (0.6 + 0.4 * abs(cos(a))) * (1.0 - tuck);
+                float twist = -roll * 0.8;
+                birds = max(birds, raptorShape(p, rp, span, roll, time * 5.5, flapAmt, tuck, flex, fan, twist, rdir) * raptorDay);
             }
         }
         col = mix(col, bgColor.rgb * 0.16 + gSkyLow * 0.06, birds * fair * 0.9);
