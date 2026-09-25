@@ -2078,5 +2078,11 @@ void main() {
     float knee = 0.82;
     if (peak > knee) col *= (knee + (peak - knee) / (1.0 + (peak - knee) * 2.2)) / peak;
 
+    // Dither before the 8-bit framebuffer: breaks up banding in the long,
+    // soft sky and water gradients on a 1440 px tall screen.
+    float dz = hash21(qt_TexCoord0 * vec2(5120.0, 1440.0) + fract(time * 7.13) * 91.0)
+             + hash21(qt_TexCoord0 * vec2(5120.0, 1440.0) * 1.37 + 17.0) - 1.0;
+    col += dz / 255.0;
+
     fragColor = vec4(max(col, vec3(0.0)), 1.0) * qt_Opacity;
 }
