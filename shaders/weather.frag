@@ -161,20 +161,37 @@ vec3 gGrassCol, gFoliage;
 
 // Cumulus deck on a plane above the land, seen in perspective: clouds are
 // large overhead and shrink and flatten toward the horizon.
-float cloudDensity(vec2 p, bool fine) {
+vec2 cloudPlane(vec2 p) {
+    float z = 1.0 / (max(WL - p.y, 0.004) + 0.09);
+    return vec2(p.x * z * 0.55, z * 1.1) + vec2(gDrift, 0.0);
+}
+
+vec2 cloudWarp(vec2 cp) {
+    float evo = time * 0.005;
+    return vec2(fbm3(cp * 0.6 + vec2(evo, 1.3)), fbm3(cp * 0.6 + vec2(4.1, -evo)));
+}
+
+// Cover is not uniform: it drifts regionally, so the sky breaks up in one
+// place while it closes in another.
+float cloudLocal(vec2 cp) {
+    return (fbm3(cp * 0.13 + vec2(time * 0.0012, 7.0)) - 0.5) * 0.45;
+}
+
+// The density itself, given a point's plane coordinates and a warp and
+// regional cover that nearby samples can share (they barely change over
+// the few pixels a lighting probe moves).
+float cloudCore(vec2 p, vec2 cp, vec2 w, float local, bool fine) {
     float h = WL - p.y;
     if (h <= 0.004) return 0.0;
-    float z = 1.0 / (h + 0.09);
-    vec2 cp = vec2(p.x * z * 0.55, z * 1.1) + vec2(gDrift, 0.0);
-    float evo = time * 0.005;
-    vec2 w = vec2(fbm3(cp * 0.6 + vec2(evo, 1.3)), fbm3(cp * 0.6 + vec2(4.1, -evo)));
     float n = fine ? fbm5(cp + w * 0.85) : fbm3(cp + w * 0.85);
-    // Cover is not uniform: it drifts regionally, so the sky breaks up in
-    // one place while it closes in another.
-    float local = (fbm3(cp * 0.13 + vec2(time * 0.0012, 7.0)) - 0.5) * 0.45;
     float cover = clamp(gCover + local, 0.0, 1.0);
     float thr = mix(0.82, 0.26, cover);
     return smoothstep(thr, thr + 0.20, n) * smoothstep(0.0, 0.07, h);
+}
+
+float cloudDensity(vec2 p, bool fine) {
+    vec2 cp = cloudPlane(p);
+    return cloudCore(p, cp, cloudWarp(cp), cloudLocal(cp), fine);
 }
 
 // Wispy high cloud: no perspective, stretched by the jet stream.
@@ -242,7 +259,7 @@ vec3 seasonTint(vec3 c, float autumnHue, float dead) {
 // lines up with the screen axes and nothing reads as stripes.
 float crag(vec2 q) {
     float v = 0.0, a = 0.5;
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 4; i++) {
         v += a * (1.0 - abs(vnoise(q) * 2.0 - 1.0));
         q = mat2(1.6, 1.2, -1.2, 1.6) * q + vec2(3.1, 7.7);
         a *= 0.5;
@@ -252,9 +269,12 @@ float crag(vec2 q) {
 
 // Height of the rock surface on a mountain face, domain-warped so buttresses
 // and gullies wander instead of running in rulings.
-float faceHeight(vec2 p, float seed) {
-    vec2 w = vec2(fbm3(p * vec2(5.0, 9.0) + seed), fbm3(p * vec2(5.0, 9.0) + seed + 4.3)) - 0.5;
+float faceHeight(vec2 p, float seed, vec2 w) {
     return crag(vec2(p.x * 15.0, p.y * 24.0) + w * 1.7 + seed);
+}
+
+vec2 faceWarp(vec2 p, float seed) {
+    return vec2(fbm3(p * vec2(5.0, 9.0) + seed), fbm3(p * vec2(5.0, 9.0) + seed + 4.3)) - 0.5;
 }
 
 // One background tree: a conifer (tiered, jagged spire) or a broadleaf
@@ -331,17 +351,23 @@ float slopeTrees(vec2 p, float scale, float seed, float density, out float shade
 // on the lower slopes, snow that reaches further down in the hollows, drifting
 // cloud shadows, a rim of light along the crest when backlit, and the air in
 // front of it all.
-vec3 shadeRange(vec2 p, float ridgeY, float slope, float depth, vec3 rock, float seed) {
+vec3 shadeRange(vec2 p, float ridgeY, float slope, float depth, vec3 rock, float seed, bool cheap) {
     vec3 air = mix(gSkyLow, gSkyTop, 0.25);
     float below = max(p.y - ridgeY, 0.0);
     float alt = WL - p.y;
 
     // Surface normal (x right, y up, z toward us): relief gradient plus the
     // crest's own slope right at the top, and faces lean back toward the sky.
+    // The warp barely changes over the gradient step, so it is shared; the
+    // reflection skips the relief altogether.
     const float e = 0.0016;
-    float h0 = faceHeight(p, seed);
-    float hx = faceHeight(p + vec2(e, 0.0), seed);
-    float hy = faceHeight(p + vec2(0.0, e), seed);
+    float h0 = 0.5, hx = 0.5, hy = 0.5;
+    if (!cheap) {
+        vec2 fw = faceWarp(p, seed);
+        h0 = faceHeight(p, seed, fw);
+        hx = faceHeight(p + vec2(e, 0.0), seed, fw);
+        hy = faceHeight(p + vec2(0.0, e), seed, fw);
+    }
     const float k = 0.016;
     vec3 n = normalize(vec3(-(hx - h0) / e * k + slope * exp(-below * 45.0) * 0.9,
                             (hy - h0) / e * k + 0.30,
@@ -512,11 +538,23 @@ vec3 skyAt(vec2 p, bool refl) {
     col = mix(col, cirCol, ci * 0.55);
 
     // ---- cumulus ----
-    float d = cloudDensity(p, true);
+    // A clear sky skips the clouds entirely; the reflection uses a coarser
+    // version (it is broken up by ripples anyway).
+    float d = 0.0, dS = 0.0, dU = 0.0;
+    if (gCover > 0.03 && p.y < WL) {
+        vec2 cp0 = cloudPlane(p);
+        vec2 w0 = cloudWarp(cp0);
+        float l0 = cloudLocal(cp0);
+        d = cloudCore(p, cp0, w0, l0, !refl);
+        if (d > 0.002) {
+            vec2 toSun = normalize(gBody - p + vec2(1e-4));
+            vec2 pS = p + toSun * 0.022, pU = p + vec2(0.0, -0.02);
+            dS = cloudCore(pS, cloudPlane(pS), w0, l0, false);
+            dU = refl ? d : cloudCore(pU, cloudPlane(pU), w0, l0, false);
+        }
+    }
     if (d > 0.002) {
         vec2 toSun = normalize(gBody - p + vec2(1e-4));
-        float dS = cloudDensity(p + toSun * 0.022, false);
-        float dU = cloudDensity(p + vec2(0.0, -0.02), false);
         float lit = clamp(0.55 + (d - dS) * 3.6, 0.05, 1.5);
         // Undersides (denser above than here) sit in their own shadow.
         float under = clamp((dU - d) * 2.0 + d * 0.5, 0.0, 1.0);
@@ -537,10 +575,14 @@ vec3 skyAt(vec2 p, bool refl) {
     const float SKY_AA = 0.0008;
     float fr = farRidge(p.x);
     float cFar = smoothstep(fr - SKY_AA, fr + SKY_AA, p.y);
-    if (cFar > 0.0) {
+    // Where the nearer range covers this pixel completely, don't shade the
+    // far one at all.
+    float mr = midRidge(p.x);
+    float cMid = smoothstep(mr - SKY_AA, mr + SKY_AA, p.y);
+    if (cFar > 0.0 && cMid < 1.0) {
         float sl = (farRidge(p.x + 0.012) - farRidge(p.x - 0.012)) / 0.024;
         vec3 rock = mix(mutedColor.rgb, bgColor.rgb, 0.4);
-        col = mix(col, shadeRange(p, fr, sl, 0.60, rock, 1.0), cFar);
+        col = mix(col, shadeRange(p, fr, sl, 0.60, rock, 1.0, refl), cFar);
     }
 
     // ---- easter egg: hikers on the far range ----
@@ -622,12 +664,10 @@ vec3 skyAt(vec2 p, bool refl) {
     vec3 fogCol = mix(gSkyLow, fgColor.rgb, 0.25) * (0.45 + 0.55 * gDaylight) + gDusk * gTwilight * 0.3;
     col = mix(col, fogCol, clamp(fogBand * haze, 0.0, 0.85));
 
-    float mr = midRidge(p.x);
-    float cMid = smoothstep(mr - SKY_AA, mr + SKY_AA, p.y);
     if (cMid > 0.0) {
         float sl = (midRidge(p.x + 0.012) - midRidge(p.x - 0.012)) / 0.024;
         vec3 rock = mix(mutedColor.rgb, bgColor.rgb, 0.65);
-        col = mix(col, shadeRange(p, mr, sl, 0.30, rock, 7.0), cMid);
+        col = mix(col, shadeRange(p, mr, sl, 0.30, rock, 7.0, refl), cMid);
     }
     float fogBand2 = exp(-pow((p.y - (WL - 0.008)) / 0.018, 2.0))
                    * (0.5 + 0.8 * fbm3(vec2(p.x * 3.0 + time * 0.011, p.y * 30.0 + 4.0)));
@@ -885,7 +925,7 @@ vec4 birch(vec2 p, float bx, float topY, float seed, float stems) {
             float len = H * (0.34 - 0.18 * tb) * (0.65 + 0.6 * hb);
             vec2 bc2 = root + vec2(side * len * 0.35, -len * (0.40 + 0.25 * hb));
             vec2 end = root + vec2(side * len * 0.90, -len * (0.18 + 0.30 * hb) + len * 0.30 * smoothstep(0.7, 0.35, tb));
-            if (length(q - mix(root, end, 0.5)) > len * 0.75 + 0.09) continue;
+            if (length(q - mix(root, end, 0.5)) > len * 0.62 + 0.075) continue;
             float tbb, acb;
             float db = bezD(q, root, bc2, end, tbb, acb);
             float wb = mix(0.0036, 0.0007, tbb) * (1.0 - tb * 0.3);
@@ -1422,47 +1462,23 @@ void main() {
     vec3 col;
     float dl = p.y - WL;
 
-    if (dl <= 0.0) {
-        col = skyAt(p, false);
-
-        // Crepuscular rays: march toward the sun through the cloud deck.
-        if (gIsDay && gBodyUp > 0.05 && gCover > 0.12 && gCover < 0.92) {
-            vec2 stepV = (gBody - p) / 12.0;
-            vec2 q = p;
-            float acc = 0.0;
-            for (int i = 0; i < 12; i++) {
-                q += stepV;
-                acc += 1.0 - cloudDensity(q, false);
-            }
-            float rays = pow(acc / 12.0, 3.0) * exp(-length(p - gBody) * 1.8);
-            float strength = smoothstep(0.12, 0.35, gCover) * smoothstep(0.92, 0.6, gCover);
-            // Shafts are seen against the sky; the ranges stand in front of them.
-            float land = min(farRidge(p.x), midRidge(p.x));
-            strength *= 0.15 + 0.85 * smoothstep(land + 0.004, land - 0.004, p.y);
-            col += gSunLight * rays * strength * 0.22 * (1.0 - wxFog * 0.6);
-        }
-
-        // Lightning bolt from cloud base to the far hills.
-        if (bolt) {
-            float y0 = -0.18, y1 = WL - 0.02;
-            if (p.y > y0 && p.y < y1) {
-                float bx = gFlashX + (fbm3(vec2(p.y * 5.0, boltSeed)) - 0.5) * 0.22
-                         + (vnoise(vec2(p.y * 40.0, boltSeed + 3.0)) - 0.5) * 0.025;
-                float dd = abs(p.x - bx);
-                vec3 bc = mix(accentColor.rgb, fgColor.rgb, 0.6);
-                col += bc * (exp(-dd / 0.0012) * 1.5 + exp(-dd / 0.02) * 0.25) * gFlash;
-            }
-        }
-    } else if (p.y < shoreY) {
+    // One sky evaluation per pixel: directly for the sky, at the mirrored
+    // point for the lake. (Two inlined copies of the whole scene made the
+    // shader so large it ran at a fraction of the GPU's occupancy.)
+    bool isSky = dl <= 0.0;
+    bool isLake = !isSky && p.y < shoreY;
+    vec2 ripple = vec2(0.0);
+    float z = 1.0, fishHi = 0.0, rough = 0.0, splash = 0.0;
+    if (isLake) {
         // Ripples: a wave field on the water plane, seen in perspective,
         // choppier with wind and smoother in the distance.
-        float z = 1.0 / (dl + 0.012);
+        z = 1.0 / (dl + 0.012);
         vec2 wv = vec2(p.x * z * 0.9, z * 2.2);
         float t = time * (0.35 + wxWind * 1.2);
-        float rough = 0.25 + gWindS * 2.2 + wxRain * 0.6;
+        rough = 0.25 + gWindS * 2.2 + wxRain * 0.6;
         float nx = fbm3(wv * vec2(1.0, 0.35) + vec2(t * 0.3, t)) - 0.5;
         float ny = fbm3(wv * vec2(0.8, 0.30) + vec2(-t * 0.2, t * 0.8 + 5.0)) - 0.5;
-        vec2 ripple = vec2(nx * 0.010, ny * 0.006) * rough * (0.35 + dl * 9.0);
+        ripple = vec2(nx * 0.010, ny * 0.006) * rough * (0.35 + dl * 9.0);
         // A hard wind chops the whole surface: short, steep wind waves that
         // shatter the reflection, even far out.
         if (gWindS > 0.3) {
@@ -1488,8 +1504,8 @@ void main() {
         // something off the surface -- a small splash, then a train of
         // rings seen in perspective. Most at dawn and dusk, in calm water,
         // never under ice.
-        float fishHi = 0.0;
-        float splash = 0.0;
+        fishHi = 0.0;
+        splash = 0.0;
         {
             float dawnDusk = gIsDay ? 1.0 - 0.75 * sin(PI * clamp(sunPhase, 0.0, 1.0)) : 0.30;
             float fishActive = dawnDusk * (1.0 - gWindS * 0.85) * smoothstep(1.0, 5.0, wxTemp)
@@ -1519,8 +1535,44 @@ void main() {
             }
         }
 
-        vec2 pr = vec2(p.x, WL - dl) + ripple;
-        vec3 refl = skyAt(pr, true);
+    }
+    vec2 pr = vec2(p.x, WL - max(dl, 0.0)) + ripple;
+    vec3 skyCol = (isSky || isLake) ? skyAt(isLake ? pr : p, isLake) : vec3(0.0);
+
+    if (isSky) {
+        col = skyCol;
+
+        // Crepuscular rays: march toward the sun through the cloud deck.
+        if (gIsDay && gBodyUp > 0.05 && gCover > 0.12 && gCover < 0.92) {
+            // Seven cheap, unwarped probes: the shafts are soft anyway.
+            vec2 stepV = (gBody - p) / 7.0;
+            vec2 q = p + stepV * hash21(p * 911.0) * 0.8;               // jitter hides the steps
+            float acc = 0.0;
+            for (int i = 0; i < 7; i++) {
+                q += stepV;
+                acc += 1.0 - cloudCore(q, cloudPlane(q), vec2(0.5), 0.0, false);
+            }
+            float rays = pow(acc / 7.0, 3.0) * exp(-length(p - gBody) * 1.8);
+            float strength = smoothstep(0.12, 0.35, gCover) * smoothstep(0.92, 0.6, gCover);
+            // Shafts are seen against the sky; the ranges stand in front of them.
+            float land = min(farRidge(p.x), midRidge(p.x));
+            strength *= 0.15 + 0.85 * smoothstep(land + 0.004, land - 0.004, p.y);
+            col += gSunLight * rays * strength * 0.22 * (1.0 - wxFog * 0.6);
+        }
+
+        // Lightning bolt from cloud base to the far hills.
+        if (bolt) {
+            float y0 = -0.18, y1 = WL - 0.02;
+            if (p.y > y0 && p.y < y1) {
+                float bx = gFlashX + (fbm3(vec2(p.y * 5.0, boltSeed)) - 0.5) * 0.22
+                         + (vnoise(vec2(p.y * 40.0, boltSeed + 3.0)) - 0.5) * 0.025;
+                float dd = abs(p.x - bx);
+                vec3 bc = mix(accentColor.rgb, fgColor.rgb, 0.6);
+                col += bc * (exp(-dd / 0.0012) * 1.5 + exp(-dd / 0.02) * 0.25) * gFlash;
+            }
+        }
+    } else if (isLake) {
+        vec3 refl = skyCol;
 
         // The tree mirrored in the water.
         vec2 ruv = pr / ICON_SCALE + 0.5;
@@ -1922,12 +1974,18 @@ void main() {
     col = mix(col, tO.rgb, tO.a);
 
     // ---- shrubs on the near meadow ----
-    vec4 sh;
-    sh = shrub(p, vec2(-gHalfW + 0.66, 0.545), 0.20, 0.17, 0.0, 11.0);  col = mix(col, sh.rgb, sh.a);
-    sh = shrub(p, vec2(-gHalfW + 0.06, 0.560), 0.30, 0.16, 1.0, 12.0);  col = mix(col, sh.rgb, sh.a);
-    sh = shrub(p, vec2(-0.72, 0.555), 0.26, 0.13, 1.0, 13.0);          col = mix(col, sh.rgb, sh.a);
-    sh = shrub(p, vec2(0.66, 0.555), 0.28, 0.14, 1.0, 14.0);           col = mix(col, sh.rgb, sh.a);
-    sh = shrub(p, vec2(gHalfW - 0.70, 0.545), 0.16, 0.20, 0.0, 15.0);  col = mix(col, sh.rgb, sh.a);
+    // One call site in a loop keeps the compiled shader small.
+    for (int si = 0; si < 5; si++) {
+        vec2 sb; vec2 wh; float kind;
+        if (si == 0)      { sb = vec2(-gHalfW + 0.66, 0.545); wh = vec2(0.20, 0.17); kind = 0.0; }
+        else if (si == 1) { sb = vec2(-gHalfW + 0.06, 0.560); wh = vec2(0.30, 0.16); kind = 1.0; }
+        else if (si == 2) { sb = vec2(-0.72, 0.555);          wh = vec2(0.26, 0.13); kind = 1.0; }
+        else if (si == 3) { sb = vec2(0.66, 0.555);           wh = vec2(0.28, 0.14); kind = 1.0; }
+        else              { sb = vec2(gHalfW - 0.70, 0.545);  wh = vec2(0.16, 0.20); kind = 0.0; }
+        if (abs(p.x - sb.x) > wh.x * 0.9 + wh.y * 0.5 || p.y < sb.y - wh.y * 1.7) continue;
+        vec4 sh = shrub(p, sb, wh.x, wh.y, kind, 11.0 + float(si));
+        col = mix(col, sh.rgb, sh.a);
+    }
 
     // ---- leaves in the air ----
     // Falling in autumn, torn off and blown sideways in a strong wind.

@@ -657,19 +657,24 @@ Item {
     }
   }
 
+  // The weather landscape moves slowly and is by far the heaviest style, so
+  // it redraws at 30 fps; the music-driven styles keep 60.
+  readonly property int frameMs: shaderName === "weather" ? 33 : 16
+
   Timer {
-    interval: 16
+    interval: root.frameMs
     running: root.shaderEnabled
     repeat: true
     onTriggered: {
-      root.shaderTime += 0.016
-      root.advanceSparks(0.016)
+      var dt = root.frameMs / 1000
+      root.shaderTime += dt
+      root.advanceSparks(dt)
       // Aurora keeps its natural pace in silence, then breathes only a few
       // percent faster with the music. Integrating the rate avoids phase
       // jumps when the level changes.
       var tempoLift = root.audioEnabled ? root.audioLevel * 0.10 + root.audioPeak * 0.18 : 0
-      root.auroraTime += 0.016 * (1.0 + tempoLift)
-      root.windTravel += 0.016 * root.wxWindDirN * (0.004 + Math.pow(root.wxWindN, 1.2) * 0.08)
+      root.auroraTime += dt * (1.0 + tempoLift)
+      root.windTravel += dt * root.wxWindDirN * (0.004 + Math.pow(root.wxWindN, 1.2) * 0.08)
     }
   }
 
