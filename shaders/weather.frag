@@ -19,7 +19,7 @@
 //   lake     -- mirrors the sky, the mountains and the tree, rippled by the
 //               wind, with a glitter path under the sun or moon and rain rings
 //   shore    -- a meadow of particle blades bent by gusting wind, framed by
-//               a birch and an oak whose leaves follow the season
+//               birches whose leaves follow the season and a Scots pine
 //   season   -- the date turns grass and leaves from spring green through
 //               autumn gold to winter bare; frost shrinks the grass away
 //   life     -- birds crossing on fair days, fireflies on warm nights, and
@@ -649,165 +649,152 @@ vec4 birch(vec2 p, float bx, float topY, float seed) {
     return vec4(col, cov);
 }
 
-// Oak: a thick, furrowed trunk that forks into crooked limbs under a broad,
-// lumpy crown. The crown thins and turns rust in autumn; bare limbs in winter.
-vec4 oak(vec2 p, float bx, float seed) {
+// Needle texture inside a pad: tufts of short needles at random angles,
+// denser toward the pad's heart, flickering a little in the wind.
+float needles(vec2 q, float density, float seed, out float shade) {
+    shade = 0.0;
+    vec2 g = q / 0.0042;
+    vec2 b = floor(g);
+    float best = 0.0;
+    for (int oy = -1; oy <= 1; oy++) {
+        for (int ox = -1; ox <= 1; ox++) {
+            vec2 c = b + vec2(float(ox), float(oy));
+            float h = hash21(c + seed);
+            if (h > density) continue;
+            float hh = hash21(c + seed + 5.1);
+            vec2 ctr = c + 0.5 + (vec2(hash21(c + seed + 2.2), hh) - 0.5) * 0.8
+                     + vec2(sin(time * (2.0 + 7.0 * gWindS) + hh * 25.0), 0.0) * (0.03 + 0.18 * gWindS);
+            // A tuft: three needles fanning from one point.
+            for (int n = 0; n < 3; n++) {
+                float ang = hh * 6.2831 + float(n) * 0.55 - 0.55;
+                vec2 lq = rot2(g - ctr, ang);
+                float d = length(lq / vec2(0.95, 0.10));
+                float m = smoothstep(1.0, 0.6, d);
+                if (m > best) { best = m; shade = hash21(c + seed + float(n)); }
+            }
+        }
+    }
+    return best;
+}
+
+// Scots pine: a tall trunk, grey and furrowed low down, fox-red and flaking
+// higher up; a few crooked limbs near the top carrying flat, cloud-like pads
+// of needles, lit on top and dark beneath; dead stubs on the lower trunk.
+// Evergreen, so the season only dulls it a little in winter.
+vec4 pine(vec2 p, float bx, float topY, float seed) {
     const float baseY = 0.56;
-    const float crownY = -0.14;
-    float H = baseY - crownY;
+    float H = baseY - topY;
     float hN = (baseY - p.y) / H;
-    if (hN < -0.05 || hN > 1.75 || abs(p.x - bx) > 0.62) return vec4(0.0);
-    vec2 q = vec2(p.x - treeSway(clamp(hN, 0.0, 1.6), seed) * 0.6, p.y);
+    if (hN < -0.05 || hN > 1.12 || abs(p.x - bx) > 0.36) return vec4(0.0);
+    float sway = treeSway(clamp(hN, 0.0, 1.2), seed) * 0.8;
+    vec2 q = vec2(p.x - sway, p.y);
 
     vec3 skyAmb = mix(gSkyTop, gSkyLow, 0.5);
     float bodyStr = gIsDay ? gDaylight * (1.0 - gGloom * 0.7) : 0.25 * (1.0 - gGloom);
     vec3 L = normalize(vec3(gBody.x - p.x, p.y - gBody.y, 0.4));
-    vec3 barkBase = mix(bgColor.rgb, mutedColor.rgb, 0.35) * 0.45;
+    float snowFall = clamp(wxSnow * 1.3 + gCold * 0.2 - 0.1, 0.0, 1.0);
+    vec3 snowCol = mix(fgColor.rgb, gSkyLow, 0.3) * (0.5 + 0.45 * gDaylight);
+
+    // Bark: the lower trunk grey-brown, the upper the pine's warm red-orange.
+    vec3 lowBark = mix(bgColor.rgb, mutedColor.rgb, 0.4) * 0.55;
+    vec3 highBark = hsv2rgb(vec3(0.055, 0.55, 0.55)) * (0.6 + luma(fgColor.rgb) * 0.5);
 
     vec3 col = vec3(0.0);
     float cov = 0.0;
 
-    // Trunk: wide at the flare, gnarled.
-    float trunkTop = 0.08;
-    if (q.y > trunkTop - 0.02) {
-        float tN = clamp((baseY - q.y) / (baseY - trunkTop), 0.0, 1.0);
-        float tx = bx + (fbm3(vec2(q.y * 6.0, seed)) - 0.5) * 0.03;
-        float tw = mix(0.060, 0.032, pow(tN, 0.6)) * (0.92 + 0.16 * vnoise(vec2(q.y * 30.0, seed)));
-        float dT = abs(q.x - tx);
-        float m = smoothstep(tw + 0.0015, tw - 0.0015, dT);
-        if (m > 0.0) {
-            float u = (q.x - tx) / tw;
-            float round_ = sqrt(max(1.0 - u * u, 0.0));
-            float furrow = vnoise(vec2(u * 9.0 + seed, q.y * 22.0)) * 0.6 + vnoise(vec2(u * 22.0, q.y * 60.0)) * 0.4;
-            vec3 bark = barkBase * (0.55 + 0.7 * furrow);
-            float lit = clamp(dot(normalize(vec3(u, 0.1, round_)), L), 0.0, 1.0) * bodyStr;
-            col = bark * (skyAmb * 0.8 + gSunLight * lit * 0.9) * (0.5 + 0.5 * round_);
-            cov = m;
-        }
+    // Trunk: a slight lean and a kink or two.
+    float lean = -0.035;
+    float tx = bx + lean * hN + 0.012 * sin(hN * 5.0 + seed) * hN;
+    float tw = mix(0.024, 0.006, pow(clamp(hN, 0.0, 1.0), 0.8));
+    float dT = abs(q.x - tx);
+    if (hN < 0.98 && dT < tw + 0.002) {
+        float m = smoothstep(tw + 0.0012, tw - 0.0012, dT);
+        float u = (q.x - tx) / tw;
+        float round_ = sqrt(max(1.0 - u * u, 0.0));
+        float upper = smoothstep(0.35, 0.6, hN + (vnoise(vec2(u * 3.0, q.y * 30.0)) - 0.5) * 0.15);
+        // Low: deep vertical furrows. High: thin flaking plates.
+        float furrow = vnoise(vec2(u * 7.0 + seed, q.y * 16.0)) * 0.6 + vnoise(vec2(u * 18.0, q.y * 45.0)) * 0.4;
+        float plates = vnoise(vec2(u * 5.0 + seed, q.y * 120.0));
+        vec3 bark = mix(lowBark * (0.55 + 0.8 * furrow), highBark * (0.75 + 0.45 * plates), upper);
+        float lit = clamp(dot(normalize(vec3(u, 0.15, round_)), L), 0.0, 1.0) * bodyStr;
+        col = bark * (skyAmb * 0.85 + gSunLight * lit * 1.0) * (0.5 + 0.5 * round_);
+        cov = m;
     }
 
-    // Limbs: crooked, two bends each, spreading wide.
-    float snowFall = clamp(wxSnow * 1.3 + gCold * 0.2 - 0.1, 0.0, 1.0);
-    for (int i = 0; i < 8; i++) {
+    // Dead stubs on the lower trunk.
+    for (int i = 0; i < 3; i++) {
         float fi = float(i);
-        float hh = hash1(seed * 5.0 + fi * 2.7);
-        float ang = mix(-2.75, -0.39, (fi + 0.5) / 8.0) + (hh - 0.5) * 0.3;   // upward fan
-        vec2 dir = vec2(cos(ang), sin(ang));
-        vec2 a = vec2(bx + (hh - 0.5) * 0.03, trunkTop + 0.02 - hh * 0.05);
-        float len = 0.16 + 0.12 * hash1(fi * 4.1 + seed);
-        vec2 b = a + rot2(dir, (hh - 0.5) * 0.6) * len * 0.45;
-        vec2 c = b + rot2(dir, (hash1(fi + seed) - 0.5) * 0.9) * len * 0.35;
-        vec2 e = c + rot2(dir, (hash1(fi * 2.0 + seed) - 0.5) * 1.1 - 0.2 * sign(dir.x)) * len * 0.30;
+        float h0 = 0.30 + fi * 0.10 + hash1(fi + seed) * 0.04;
+        float side = hash1(fi * 3.3 + seed) > 0.5 ? 1.0 : -1.0;
+        vec2 a = vec2(bx + lean * h0 + 0.012 * sin(h0 * 5.0 + seed) * h0, baseY - h0 * H);
+        vec2 b = a + vec2(side * (0.010 + 0.012 * hash1(fi * 7.0 + seed)), -0.004 - 0.006 * hash1(fi + 2.0));
+        float t;
+        float d = segD(q, a, b, t);
+        float m = smoothstep(0.0016, 0.0006, d) * (1.0 - cov);
+        col = mix(col, lowBark * skyAmb * 1.5, m * 0.8);
+        cov = max(cov, m);
+    }
+
+    // Limbs and their pads of needles, near the top.
+    float padBest = 0.0;
+    vec3 padCol = vec3(0.0);
+    for (int i = 0; i < 12; i++) {
+        float fi = float(i);
+        float hh = hash1(seed * 5.0 + fi * 2.3);
+        float h0 = mix(0.58, 1.0, (fi + hh * 0.7) / 12.0);
+        float side = mod(fi, 2.0) < 0.5 ? -1.0 : 1.0;
+        if (hash1(fi * 4.9 + seed) > 0.75) side = -side;
+        vec2 a = vec2(bx + lean * h0 + 0.012 * sin(h0 * 5.0 + seed) * h0, baseY - h0 * H);
+        float len = (0.09 + 0.14 * hash1(fi * 3.7 + seed)) * (1.25 - h0 * 0.7);
+        // Crooked: out, a kink up, then out again.
+        vec2 b = a + vec2(side * len * 0.45, -len * (0.05 + 0.25 * hh));
+        vec2 c = b + vec2(side * len * 0.30, -len * (0.20 + 0.25 * hash1(fi + seed)));
+        vec2 e = c + vec2(side * len * 0.35, len * (0.05 - 0.15 * hh));
         float t1, t2, t3;
         float d1 = segD(q, a, b, t1), d2 = segD(q, b, c, t2), d3 = segD(q, c, e, t3);
-        float w1 = mix(0.020, 0.012, t1), w2 = mix(0.012, 0.006, t2), w3 = mix(0.006, 0.0018, t3);
-        float mb = max(max(smoothstep(w1 + 0.0012, w1 - 0.0008, d1), smoothstep(w2 + 0.0012, w2 - 0.0006, d2)),
-                       smoothstep(w3 + 0.0010, w3 - 0.0004, d3));
+        float w1 = mix(0.0055, 0.0038, t1), w2 = mix(0.0038, 0.0026, t2), w3 = mix(0.0026, 0.0014, t3);
+        float mb = max(max(smoothstep(w1 + 0.001, w1 - 0.0005, d1), smoothstep(w2 + 0.001, w2 - 0.0005, d2)),
+                       smoothstep(w3 + 0.0009, w3 - 0.0004, d3));
         if (mb > 0.0) {
-            float furrow = vnoise(q * vec2(90.0, 120.0) + fi);
-            vec3 wood = barkBase * (0.6 + 0.5 * furrow) * (skyAmb * 0.9 + gSunLight * bodyStr * 0.35);
-            vec2 pa = d1 < d2 ? mix(a, b, t1) : (d2 < d3 ? mix(b, c, t2) : mix(c, e, t3));
-            wood = mix(wood, mix(fgColor.rgb, gSkyLow, 0.3) * (0.5 + 0.4 * gDaylight), snowFall * step(q.y, pa.y - 0.001) * 0.9);
-            col = mix(col, wood, mb * (1.0 - cov * 0.0));
+            vec3 wood = mix(highBark, lowBark, 0.4) * (skyAmb * 0.9 + gSunLight * bodyStr * 0.4);
+            col = mix(col, wood, mb * (1.0 - cov * 0.3));
             cov = max(cov, mb);
         }
-        // Sub-branches off each limb, each ending in a spray of twigs.
-        for (int k = 0; k < 3; k++) {
+        // Pads: flat, wide clouds of needles at the kink and the tip, and a
+        // smaller one partway out.
+        for (int k = 0; k < 4; k++) {
             float fk = float(k);
-            vec2 s0 = k == 0 ? mix(a, b, 0.7) : (k == 1 ? mix(b, c, 0.6) : mix(c, e, 0.5));
-            float sa = ang + (hash1(fi * 7.1 + fk * 3.3 + seed) - 0.5) * 1.8 + (fk - 1.0) * 0.4;
-            float sl = len * (0.30 + 0.25 * hash1(fi * 5.7 + fk + seed));
-            vec2 s1 = s0 + vec2(cos(sa), sin(sa)) * sl * 0.55;
-            vec2 s2 = s1 + rot2(vec2(cos(sa), sin(sa)), (hash1(fi + fk * 9.0 + seed) - 0.5) * 1.2) * sl * 0.45;
-            float u1, u2;
-            float e1 = segD(q, s0, s1, u1), e2 = segD(q, s1, s2, u2);
-            float sw1 = mix(0.0055, 0.0030, u1), sw2 = mix(0.0030, 0.0012, u2);
-            float ms = max(smoothstep(sw1 + 0.001, sw1 - 0.0005, e1), smoothstep(sw2 + 0.0009, sw2 - 0.0004, e2));
-            if (gLeaf < 0.6) {
-                for (int m = 0; m < 3; m++) {
-                    float fm = float(m);
-                    vec2 w0 = mix(s1, s2, 0.3 + fm * 0.35);
-                    vec2 w1 = w0 + rot2(vec2(cos(sa), sin(sa)), (hash1(fi * 3.0 + fk * 5.0 + fm + seed) - 0.5) * 2.0) * 0.035;
-                    float uu;
-                    float ed = segD(q, w0, w1, uu);
-                    ms = max(ms, smoothstep(0.0011, 0.0003, ed) * (1.0 - gLeaf * 1.6));
-                }
-            }
-            if (ms > 0.0) {
-                vec3 wood = barkBase * (0.7 + 0.4 * vnoise(q * 140.0 + fk)) * (skyAmb * 0.95 + gSunLight * bodyStr * 0.3);
-                wood = mix(wood, mix(fgColor.rgb, gSkyLow, 0.3) * (0.5 + 0.4 * gDaylight), snowFall * step(q.y, mix(s0, s2, 0.5).y) * 0.5);
-                col = mix(col, wood, ms);
-                cov = max(cov, ms);
-            }
-        }
-        // Winter twigs off each limb end.
-        if (gLeaf < 0.5) {
-            for (int k = 0; k < 3; k++) {
-                float fk = float(k);
-                vec2 tw0 = mix(c, e, 0.3 + fk * 0.3);
-                vec2 tw1 = tw0 + rot2(dir, (hash1(fi * 3.0 + fk + seed) - 0.5) * 1.6) * 0.05;
-                float tt;
-                float dd = segD(q, tw0, tw1, tt);
-                float twig = smoothstep(0.0012, 0.0003, dd) * (1.0 - gLeaf * 2.0);
-                col = mix(col, barkBase * skyAmb * 0.9, twig * (1.0 - cov));
-                cov = max(cov, twig);
+            vec2 cp = k == 0 ? e + vec2(side * 0.015, -0.006) : (k == 1 ? c + vec2(0.0, -0.004) : (k == 2 ? mix(a, b, 0.8) : mix(c, e, 0.5) + vec2(0.0, 0.012)));
+            float pw = (k == 0 ? 0.085 : (k == 1 ? 0.070 : (k == 2 ? 0.050 : 0.060))) * (0.8 + 0.4 * hash1(fi * 2.0 + fk + seed));
+            float ph = pw * (0.38 + 0.12 * hash1(fi + fk * 3.0));
+            vec2 dq = q - cp;
+            // Domed top, flatter underside, ragged rim.
+            float up = dq.y < 0.0 ? 1.0 : 0.72;
+            float rim = (fbm3(dq * 70.0 + fi * 3.0 + fk) - 0.5) * 0.45;
+            float d = length(vec2(dq.x / pw, dq.y / (ph * up))) + rim;
+            float env = smoothstep(1.0, 0.55, d);
+            if (env <= 0.0) continue;
+            float shade;
+            float nd = needles(q, 0.55 + 0.45 * env, seed + fi * 7.0 + fk, shade);
+            float m = max(smoothstep(0.75, 0.35, d), nd * env);
+            if (m > padBest) {
+                // Lit from above and from the sun's side; undersides dark.
+                float topness = clamp(-dq.y / (ph * up), -1.0, 1.0);
+                float sunSide = clamp(dq.x * sign(gBody.x - cp.x) / pw, -1.0, 1.0);
+                float lit = (0.45 + 0.55 * max(topness, 0.0) + 0.25 * sunSide) * bodyStr;
+                vec3 green = mix(gFoliage, gFoliage * vec3(0.85, 1.0, 0.95), 0.5) * (0.75 + 0.45 * shade);
+                green = mix(green, vec3(luma(green)) * 0.9, (1.0 - gLeaf) * 0.25);   // duller in winter
+                vec3 pc = green * (skyAmb * (0.75 + 0.35 * topness) * 1.2 + gSunLight * max(lit, 0.0) * 0.9);
+                pc *= mix(0.55, 1.0, smoothstep(-0.8, 0.4, topness));
+                // Snow sits on the domed tops.
+                pc = mix(pc, snowCol * (0.85 + 0.3 * shade), snowFall * smoothstep(-0.05, 0.45, topness) * smoothstep(0.25, 0.6, shade + 0.25) * 0.95);
+                padCol = pc;
+                padBest = m;
             }
         }
     }
-
-    // Crown: one lumpy mass (a soft union of clumps), solid inside and
-    // breaking into leaf particles at its edge. Shaded as a whole, with the
-    // lumps adding local relief.
-    if (gLeaf > 0.01) {
-        float field = 0.0;
-        vec2 grad = vec2(0.0);
-        for (int i = 0; i < 30; i++) {
-            float fi = float(i);
-            vec2 cp;
-            if (i < 8) {
-                float hh = hash1(seed * 5.0 + fi * 2.7);
-                float ang = mix(-2.75, -0.39, (fi + 0.5) / 8.0) + (hh - 0.5) * 0.3;
-                float len = 0.16 + 0.12 * hash1(fi * 4.1 + seed);
-                cp = vec2(bx, trunkTop) + vec2(cos(ang), sin(ang)) * len * 0.95;
-            } else {
-                float r1 = hash1(fi * 1.7 + seed), r2 = hash1(fi * 3.9 + seed);
-                float an = r1 * 6.2831;
-                cp = vec2(bx, crownY + 0.03) + vec2(cos(an) * 0.29, sin(an) * 0.16) * sqrt(r2);
-            }
-            float rr = (0.060 + 0.035 * hash1(fi * 6.1 + seed)) * (0.7 + 0.3 * gLeaf);
-            vec2 dq = (q - cp) * vec2(1.0, 1.15);
-            float k = exp(-dot(dq, dq) / (rr * rr));
-            field += k;
-            grad += k * dq / (rr * rr);
-        }
-        // Lumpy boundary: a threshold on the summed field, broken by noise.
-        float edgeN = (fbm3(q * 22.0 + seed) - 0.5) * 0.7 + (fbm3(q * 70.0 + seed * 2.0) - 0.5) * 0.35;
-        float level = field + edgeN;
-        // Sky gaps through the crown where the foliage is thinnest.
-        float holes = smoothstep(0.30, 0.50, fbm3(q * 16.0 + seed * 4.0) + (field - 1.0) * 0.25);
-        float inner = smoothstep(0.55, 0.9, level) * holes;
-        float halo = smoothstep(0.20, 0.55, level);
-        float shade;
-        float dots = leafDots(q, 0.0075, gLeaf * halo, seed * 1.7, shade);
-        float thin = 1.0 - gLeaf;                         // autumn: see through it
-        float mass = max(inner * (1.0 - thin * 0.9) * smoothstep(0.35, 0.6, vnoise(q * 160.0 + seed) + gLeaf * 0.6), dots);
-        if (mass > 0.0) {
-            // Crown-scale shape plus the relief of individual leaf clusters.
-            vec2 cq = q * 38.0 + seed;
-            float c0 = fbm3(cq);
-            vec2 cg = vec2(fbm3(cq + vec2(0.05, 0.0)) - c0, fbm3(cq + vec2(0.0, 0.05)) - c0) / 0.05;
-            vec3 n = normalize(vec3(-grad.x * 0.02 - cg.x * 0.9, grad.y * 0.02 + cg.y * 0.9, 1.0));
-            float lit = clamp(dot(n, L), 0.0, 1.0) * bodyStr;
-            float cy = clamp((q.y - crownY) / 0.18, -1.0, 1.0);
-            float under = smoothstep(-0.2, 1.0, cy);
-            vec3 fol = seasonTint(gFoliage * (0.75 + 0.45 * shade), 0.07, 0.0);
-            fol = mix(fol, seasonTint(gFoliage, 0.10, 0.4), step(0.75, shade) * gAutumn);
-            float depthShade = mix(0.72, 1.0, dots) * (0.78 + 0.35 * smoothstep(0.3, 0.7, c0));          // the solid core sits behind the edge leaves
-            vec3 fc = fol * (skyAmb * (1.0 - under * 0.40) * 1.45 + gSunLight * lit * 1.0) * depthShade;
-            col = mix(col, fc, mass);
-            cov = max(cov, mass);
-        }
-    }
+    col = mix(col, padCol, padBest);
+    cov = max(cov, padBest);
     return vec4(col, cov);
 }
 
@@ -847,7 +834,8 @@ void main() {
     gDry = max(smoothstep(0.68, 0.88, sN), 1.0 - smoothstep(0.22, 0.33, sN));
     gFlowers = smoothstep(0.36, 0.42, sN) * (1.0 - smoothstep(0.62, 0.70, sN)) * smoothstep(6.0, 12.0, wxTemp);
     // Grass shrinks and browns with frost and is gone by -15.
-    gGrassAmt = smoothstep(-15.0, -6.0, wxTemp);
+    // Deep snow buries it too.
+    gGrassAmt = smoothstep(-15.0, -6.0, wxTemp) * (1.0 - smoothstep(0.3, 0.8, wxSnow) * 0.9);
     gGrassH = mix(0.35, 1.0, smoothstep(-15.0, 3.0, wxTemp)) * (1.0 - clamp(wxSnow * 1.1, 0.0, 1.0) * 0.7);
     gDry = max(gDry, 1.0 - smoothstep(-8.0, 2.0, wxTemp));
     gWindS = pow(clamp(wxWind, 0.0, 1.0), 0.8);
@@ -1226,12 +1214,12 @@ void main() {
     col += rimCol * edge * (0.45 + 0.55 * litSide) * edgeGlowBrightness;
     col = mix(col, snowCol * (0.55 + 0.45 * gDaylight), snowCap * 0.9);
 
-    // ---- framing trees: birch on the left, oak on the right ----
+    // ---- framing trees: birches on the left, a pine on the right ----
     vec4 tB = birch(p, -gHalfW + 0.20, -0.44, 1.0);
     col = mix(col, tB.rgb, tB.a);
     vec4 tB2 = birch(p, -gHalfW + 0.46, -0.16, 5.0);
     col = mix(col, tB2.rgb, tB2.a * (1.0 - tB.a));
-    vec4 tO = oak(p, gHalfW - 0.44, 3.0);
+    vec4 tO = pine(p, gHalfW - 0.36, -0.40, 3.0);
     col = mix(col, tO.rgb, tO.a);
 
     // ---- leaves in the air ----
