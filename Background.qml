@@ -137,6 +137,7 @@ Item {
   property real wxCloudLive: -1
   property real wxPrecipLive: 0
   property real wxWindLive: 0
+  property real wxWindDirLive: 270
   property real wxTempLive: 10
   property real wxSunrise: 0
   property real wxSunset: 0
@@ -150,6 +151,14 @@ Item {
   property real wxFogN: 0
   property real wxStormN: 0
   property real wxWindN: 0.2
+  // Sideways component of the wind as seen on screen, facing north: +1 blows
+  // left to right (a westerly), -1 right to left. Kept away from zero so a
+  // northerly still visibly moves things.
+  property real wxWindDirN: 1
+  property real testWindDir: -999
+  // Distance the wind has carried the clouds, integrated so a change of
+  // speed or direction never makes the sky jump.
+  property real windTravel: 0
   property real wxTempN: 10
 
   function advanceSparks(dt) {
@@ -201,6 +210,12 @@ Item {
     wxStormN = pr.storm
     wxWindN = (!preview && wxOk) ? Math.max(0, Math.min(1, wxWindLive / 60)) : (pr.storm > 0 ? 0.6 : 0.25)
     if (testWind >= 0) wxWindN = testWind
+    // Meteorological direction is where the wind comes FROM; it blows toward
+    // the opposite side, whose east-west part is -sin(from).
+    var side = -Math.sin(wxWindDirLive * Math.PI / 180)
+    if (preview || !wxOk) side = 1
+    if (testWindDir > -900) side = testWindDir
+    wxWindDirN = (side >= 0 ? 1 : -1) * Math.max(Math.abs(side), 0.35)
     wxTempN = wxOk ? wxTempLive : 10
     // A snow preview on a warm day would melt as it lands; make it winter.
     if (preview && pr.snow > 0 && wxTempN > 0) wxTempN = -4
@@ -242,7 +257,7 @@ Item {
 
   function setTesting(on) {
     testingEnabled = on
-    if (!on) { testCode = -1; testPhase = -1; testWind = -1; testTemp = -999; testSeason = -1 }
+    if (!on) { testCode = -1; testPhase = -1; testWind = -1; testTemp = -999; testSeason = -1; testWindDir = -999 }
     recomputeWeather()
   }
 
@@ -258,6 +273,7 @@ Item {
     else if (kind === "wind") testWind = value
     else if (kind === "temp") testTemp = value
     else if (kind === "season") testSeason = value
+    else if (kind === "dir") testWindDir = value
     recomputeWeather()
   }
 
@@ -634,6 +650,7 @@ Item {
       // jumps when the level changes.
       var tempoLift = root.audioEnabled ? root.audioLevel * 0.10 + root.audioPeak * 0.18 : 0
       root.auroraTime += 0.016 * (1.0 + tempoLift)
+      root.windTravel += 0.016 * root.wxWindDirN * (0.004 + Math.pow(root.wxWindN, 1.2) * 0.08)
     }
   }
 
@@ -651,6 +668,7 @@ Item {
             root.wxCloudLive = (w.cloud === null || w.cloud === undefined) ? -1 : Number(w.cloud)
             root.wxPrecipLive = Number(w.precip) || 0
             root.wxWindLive = Number(w.wind) || 0
+            root.wxWindDirLive = (w.windDir === null || w.windDir === undefined) ? 270 : Number(w.windDir)
             root.wxTempLive = Number(w.temp) || 0
             root.wxSunrise = Number(w.sunrise) || 0
             root.wxSunset = Number(w.sunset) || 0
@@ -906,6 +924,8 @@ Item {
         property real wxWind: root.wxWindN
         property real wxTemp: root.wxTempN
         property real season: root.wxSeason
+        property real windSide: root.wxWindDirN
+        property real windTravel: root.windTravel
         property real flashTime: root.flashTime
         property real iconWarpScale: root.cfgIconWarpScale
         property real edgeGlowWidth: root.cfgEdgeGlowWidth
@@ -1105,6 +1125,7 @@ Item {
               { kind: "phase", items: [["Live", -1], ["Sunrise", 0.03], ["Morning", 0.2], ["Noon", 0.5], ["Afternoon", 0.75],
                                        ["Sunset", 0.97], ["Dusk", 1.04], ["Night", 1.5], ["Pre-dawn", 1.95]] },
               { kind: "wind", items: [["Live", -1], ["Calm", 0.0], ["Breeze", 0.25], ["Windy", 0.55], ["Gale", 0.95]] },
+              { kind: "dir", items: [["Live", -999], ["→ from west", 1], ["← from east", -1], ["↘ from NW", 0.5]] },
               { kind: "temp", items: [["Live", -999], ["-15°", -15], ["-3°", -3], ["5°", 5], ["14°", 14], ["24°", 24]] },
               { kind: "season", items: [["Live", -1], ["Spring", 0.36], ["Summer", 0.56], ["Autumn", 0.75], ["Late autumn", 0.86], ["Winter", 0.04]] }
             ]
@@ -1130,7 +1151,8 @@ Item {
                   required property var modelData
                   property string kind: testRow.modelData.kind
                   property real current: kind === "code" ? root.testCode : kind === "phase" ? root.testPhase
-                                       : kind === "wind" ? root.testWind : kind === "season" ? root.testSeason : root.testTemp
+                                       : kind === "wind" ? root.testWind : kind === "season" ? root.testSeason
+                                       : kind === "dir" ? root.testWindDir : root.testTemp
                   property bool active: Math.abs(current - modelData[1]) < 0.001
                   width: label.implicitWidth + 14
                   height: 22

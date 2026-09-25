@@ -46,7 +46,7 @@ fi
 [[ -n $lat && -n $lon ]] || fail
 
 url="https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}"
-url+="&current=weather_code,is_day,temperature_2m,wind_speed_10m,cloud_cover,precipitation"
+url+="&current=weather_code,is_day,temperature_2m,wind_speed_10m,wind_direction_10m,cloud_cover,precipitation"
 url+="&daily=sunrise,sunset&forecast_days=2&timezone=auto&timeformat=unixtime"
 data=$(curl -fsS --max-time 8 "$url" 2>/dev/null) || fail
 
@@ -57,6 +57,7 @@ out=$(jq -c --arg name "$name" '{
   isDay: .current.is_day,
   temp: .current.temperature_2m,
   wind: .current.wind_speed_10m,
+  windDir: .current.wind_direction_10m,
   cloud: .current.cloud_cover,
   precip: .current.precipitation,
   sunrise: .daily.sunrise[0],
