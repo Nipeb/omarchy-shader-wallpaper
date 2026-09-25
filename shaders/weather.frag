@@ -565,32 +565,45 @@ vec3 skyAt(vec2 p, bool refl) {
             for (int i = 0; i < 3; i++) {
                 float fi = float(i);
                 if (fi >= count) break;
-                float hx = x0 + dir * (st * 0.0026 - fi * 0.010);
+                float hx = x0 + dir * (st * 0.00045 - fi * 0.0045);
                 float crestY = farRidge(hx);
                 float hy = crestY + 0.020 + 0.005 * sin(hx * 9.0 + hSlot);
                 // Hidden where the nearer range stands in front of the path.
                 if (midRidge(hx) < hy) continue;
                 if (abs(p.x - hx) > 0.02) continue;
-                float step_ = st * 3.2 + fi * 1.3;
-                float bob = abs(sin(step_)) * 0.00025;
-                vec2 fq = p - vec2(hx, hy);
+                float step_ = st * 3.0 + fi * 1.3;
+                float bob = abs(sin(step_)) * 0.00012;
+                // A few pixels tall: they are kilometres away.
+                vec2 fq = (p - vec2(hx, hy)) / 0.62;
                 float body = step(abs(fq.x), 0.00050) * step(fq.y, -0.0013) * step(-0.0034 - bob, fq.y);
-                float legA = step(abs(fq.x - 0.00035 * sin(step_)), 0.00022) * step(fq.y, 0.0) * step(-0.0014, fq.y);
-                float legB = step(abs(fq.x + 0.00035 * sin(step_)), 0.00022) * step(fq.y, 0.0) * step(-0.0014, fq.y);
+                float legA = step(abs(fq.x - 0.00030 * sin(step_)), 0.00022) * step(fq.y, 0.0) * step(-0.0014, fq.y);
+                float legB = step(abs(fq.x + 0.00030 * sin(step_)), 0.00022) * step(fq.y, 0.0) * step(-0.0014, fq.y);
                 float head = step(length(fq - vec2(0.0, -0.0040 - bob)), 0.00055);
                 float pack = step(abs(fq.x + dir * 0.00065), 0.00040) * step(fq.y, -0.0018 - bob) * step(-0.0032 - bob, fq.y);
                 float fig = max(max(body, max(legA, legB)), max(head, pack));
                 col = mix(col, mix(bgColor.rgb * 0.12, mix(gSkyLow, gSkyTop, 0.3), 0.25), fig * fade * (0.7 + 0.3 * gDaylight));
                 if (nightF > 0.15) {
                     // Head yaw: scanning the trail, glancing round.
-                    float look = sin(time * 0.55 + fi * 2.1 + hSlot) * 1.5 + sin(time * 1.7 + fi) * 0.35;
+                    // Head yaw: wandering noise plus sudden glances -- now
+                    // and then the beam swings straight at us.
+                    float wander = (fbm3(vec2(time * 0.22 + fi * 7.0, hSlot)) - 0.5) * 5.0;
+                    float glanceT = time * 0.13 + fi * 3.7;
+                    float glance = (hash1(floor(glanceT) + fi * 11.0) - 0.5) * 3.5 * smoothstep(0.0, 0.08, fract(glanceT)) * smoothstep(0.35, 0.2, fract(glanceT));
+                    float look = wander + glance + dir * 0.9;
                     float facing = cos(look);
                     float flick = 0.85 + 0.15 * sin(step_ * 2.0) * sin(time * 23.0 + fi);
                     float lampI = smoothstep(-0.15, 0.9, facing) * flick;
-                    vec2 lp = vec2(hx + dir * 0.00035, hy - 0.0041 - bob);
+                    vec2 lp = vec2(hx + dir * 0.00022, hy - 0.0025 - bob);
                     float dl2 = dot(p - lp, p - lp);
                     vec3 lampCol = mix(fgColor.rgb, vec3(1.0, 0.95, 0.85), 0.5);
                     col += lampCol * (exp(-dl2 / 3.0e-8) * 2.2 * lampI + exp(-dl2 / 5.0e-6) * 0.20 * (0.3 + lampI)) * nightF * fade;
+                    // Looking straight at us: a flash with a bloom and star.
+                    float flash = smoothstep(0.965, 1.0, facing) * nightF * fade;
+                    if (flash > 0.0) {
+                        vec2 dq = abs(p - lp);
+                        float star = exp(-dq.y / 0.00012) * exp(-dq.x / 0.006) + exp(-dq.x / 0.00012) * exp(-dq.y / 0.004);
+                        col += lampCol * flash * (exp(-dl2 / 4.0e-6) * 1.6 + exp(-dl2 / 1.2e-4) * 0.25 + star * 0.9);
+                    }
                     // When turned sideways the beam itself shows, raking the slope.
                     vec2 bd = vec2(sin(look) * dir, 0.35);
                     float along = dot(p - lp, normalize(bd));
@@ -670,7 +683,12 @@ vec3 skyAt(vec2 p, bool refl) {
         float fireOn = step(0.60, hash1(fireSlot * 7.7)) * smoothstep(0.9, 0.2, gDaylight + (1.0 - gTwilight) * 0.0)
                      * (1.0 - smoothstep(0.2, 0.45, wxRain)) * (1.0 - smoothstep(0.4, 0.8, wxSnow));
         float fx = (hash1(fireSlot * 3.1) > 0.5 ? 1.0 : -1.0) * mix(0.45, 1.25, hash1(fireSlot * 5.9));
-        if (eggCampfire > 0.5) { fireOn = 1.0; fx = -0.62; }
+        if (eggCampfire > 0.5) {
+            // Forced: a new spot every minute and a half.
+            float fs2 = floor(time / 90.0);
+            fireOn = 1.0;
+            fx = (hash1(fs2 * 3.1 + 0.7) > 0.5 ? 1.0 : -1.0) * mix(0.42, 1.30, hash1(fs2 * 5.9 + 0.3));
+        }
         if (fireOn > 0.01 && abs(p.x - fx) < 0.25 && p.y > WL - 0.25 && p.y < WL + 0.01) {
             vec2 fp = vec2(fx, WL - 0.0022);
             float night = 1.0 - gDaylight * 0.8;
@@ -1397,6 +1415,10 @@ void main() {
 
     // ---- the lake and the shore ----
     float shoreY = 0.405 + 0.028 * fbm3(vec2(p.x * 1.3, 9.0)) + 0.018 * sin(p.x * 0.9 + 1.0);
+    // The waterline wanders at small scale too: little points and coves.
+    shoreY += (fbm3(vec2(p.x * 38.0, 5.0)) - 0.5) * 0.006;
+    // A narrow strip of shore between the water and the meadow.
+    float beachY = shoreY + 0.009 + 0.013 * vnoise(vec2(p.x * 5.0, 3.3));
     vec3 col;
     float dl = p.y - WL;
 
@@ -1530,6 +1552,22 @@ void main() {
             float caps = crest * smoothstep(0.35, 0.9, gWindS) * smoothstep(0.0, 0.06, dl);
             col = mix(col, mix(fgColor.rgb, gSkyLow, 0.4) * (0.5 + 0.5 * gDaylight), caps * 0.55);
         }
+        // Shallows: the stony bottom shows through near the shore, and a
+        // small wave laps at the edge, leaving a line of foam.
+        {
+            float shallow = smoothstep(shoreY - 0.016, shoreY, p.y);
+            vec2 sg = vec2(p.x * 700.0, p.y * 1500.0) + ripple * 3000.0;
+            float pebble = smoothstep(0.35, 0.65, vnoise(sg)) * 0.6 + vnoise(sg * 0.3) * 0.4;
+            vec3 bottom = mix(mix(mutedColor.rgb, fgColor.rgb, 0.2) * 0.35, bgColor.rgb * 0.3, pebble);
+            bottom *= mix(gSkyTop, gSkyLow, 0.5) * 1.3 + gSunLight * (gIsDay ? gDaylight : 0.1) * 0.4;
+            col = mix(col, bottom, shallow * 0.55 * (1.0 - smoothstep(0.0, -4.0, wxTemp) * 0.8));
+            float lapY = shoreY - 0.0016 - 0.0013 * (0.5 + 0.5 * sin(time * 1.3 + p.x * 22.0 + sin(p.x * 6.0) * 2.0));
+            float foam = smoothstep(0.0009, 0.0, abs(p.y - lapY)) * smoothstep(0.35, 0.75, vnoise(vec2(p.x * 90.0 + time * 0.5, 1.0)))
+                       * (0.5 + 0.5 * vnoise(vec2(p.x * 300.0, 2.0)));
+            foam += smoothstep(0.0008, 0.0, abs(p.y - (lapY - 0.0022))) * 0.35 * vnoise(vec2(p.x * 180.0 - time, 4.0));
+            col = mix(col, mix(fgColor.rgb, gSkyLow, 0.35) * (0.45 + 0.55 * gDaylight), clamp(foam, 0.0, 1.0) * (0.35 + 0.5 * gWindS));
+        }
+
         // Lake mist on still mornings and fog.
         float mist = (0.10 + wxFog * 0.6 + (gIsDay ? smoothstep(0.18, 0.0, sunPhase) * 0.4 : 0.0))
                    * exp(-dl * 22.0) * (0.5 + fbm3(vec2(p.x * 3.0 - time * 0.02, dl * 50.0)));
@@ -1550,7 +1588,7 @@ void main() {
         const float BLADE_H = 0.0050;
         const float CELL_W = 0.00072;
         const int ROWS = 36;
-        float invFar = (shoreY - WL) / CAM_H;
+        float invFar = (mix(shoreY, beachY, 0.45) - WL) / CAM_H;
         float invNear = (0.53 - WL) / CAM_H;
         float invMax = invNear * 2.4;
         float rowStep = (invMax - invFar) / float(ROWS - 1);
@@ -1562,8 +1600,32 @@ void main() {
         float frost = smoothstep(0.0, -6.0, wxTemp) * (1.0 - snowG);
         float pix = 1.0 / 1440.0;
 
+        // The shore: pebbles and gravel, dark and glinting where wet, moss
+        // creeping in toward the grass.
+        if (p.y >= shoreY && p.y < beachY) {
+            float bt = (p.y - shoreY) / max(beachY - shoreY, 1e-4);
+            vec2 g = vec2(p.x * 760.0, p.y * 1500.0);
+            vec2 id = floor(g);
+            vec2 fq = fract(g) - 0.5;
+            float hh = hash21(id);
+            vec2 off = (vec2(hash21(id + 1.3), hash21(id + 2.7)) - 0.5) * 0.45;
+            vec2 sq = (fq - off) * vec2(1.0, 1.35);
+            float rad = 0.22 + 0.22 * hh;
+            float stone = smoothstep(rad, rad - 0.10, length(sq));
+            vec3 gravel = mix(mutedColor.rgb, fgColor.rgb, 0.22) * 0.42 * (0.75 + 0.5 * vnoise(g * 0.7));
+            vec3 stoneCol = mix(mutedColor.rgb * 0.60, bgColor.rgb * 0.55, hash21(id + 5.5)) * (0.75 + 0.5 * hh);
+            stoneCol *= 0.8 + 0.45 * clamp(-sq.y * 4.0, 0.0, 1.0);          // lit tops
+            vec3 beach = mix(gravel, stoneCol, stone);
+            float wet = smoothstep(0.55, 0.0, bt);
+            beach *= 1.0 - wet * 0.45;
+            beach *= skyAmb * 1.25 + gSunLight * bodyStr * 0.5;
+            beach += mix(gSkyLow, fgColor.rgb, 0.3) * wet * stone * smoothstep(0.1, -0.2, sq.y) * 0.12;   // wet glints
+            beach = mix(beach, seasonTint(gGrassCol, 0.10, gDry) * 0.32 * (skyAmb * 1.2), smoothstep(0.55, 1.0, bt) * 0.65);
+            beach = mix(beach, mix(fgColor.rgb, gSkyLow, 0.35) * (0.35 + 0.55 * gDaylight), snowG * smoothstep(0.2, 0.8, bt));
+            col = mix(beach, airCol * 0.5, 0.18);
+        }
         // Ground under the grass: sod in summer, litter in autumn, frost, snow.
-        if (p.y >= shoreY) {
+        if (p.y >= beachY) {
             float invZ = (p.y - WL) / CAM_H;
             vec3 sod = seasonTint(gGrassCol, 0.10, gDry) * 0.30;
             sod *= 0.7 + 0.6 * fbm3(vec2(p.x / invZ * 900.0, invZ * 3.0));
@@ -1572,6 +1634,45 @@ void main() {
             sod = mix(sod, mix(fgColor.rgb, gSkyLow, 0.35) * (0.35 + 0.55 * gDaylight) * (0.85 + 0.15 * fbm3(p * 40.0)), snowG);
             float haze = smoothstep(invFar * 1.8, invFar, invZ) * 0.3;
             col = mix(sod, airCol * 0.5, haze);
+        }
+
+        // Boulders along the waterline, half in the lake, with their
+        // reflections; moss on top in summer, snow in winter.
+        {
+            float bw = 0.20;
+            float bc0 = floor(p.x / bw);
+            for (int k = -1; k <= 1; k++) {
+                float bcell = bc0 + float(k);
+                float bh = hash1(bcell * 5.7 + 2.0);
+                if (bh > 0.55) continue;
+                float bx = (bcell + 0.2 + 0.6 * hash1(bcell * 3.3)) * bw;
+                if (abs(bx) < 0.32) continue;                             // not under the mark
+                float by = 0.405 + 0.028 * fbm3(vec2(bx * 1.3, 9.0)) + 0.018 * sin(bx * 0.9 + 1.0) + 0.0012;
+                float rx = 0.006 + 0.012 * hash1(bcell * 7.1);
+                float ry = rx * (0.55 + 0.2 * hash1(bcell * 9.9));
+                vec2 bq = (p - vec2(bx, by)) / vec2(rx, ry);
+                float lump = (fbm3(p * 400.0 + bcell) - 0.5) * 0.25;
+                // Above the waterline: the dome of the rock.
+                if (bq.y < 0.0) {
+                    float m = smoothstep(1.0, 0.9, length(bq) + lump);
+                    if (m > 0.0) {
+                        vec3 n = normalize(vec3(bq.x, -bq.y, 0.6));
+                        vec3 Lr = normalize(vec3(gBody.x - bx, by - gBody.y, 0.5));
+                        float lit = clamp(dot(n, Lr), 0.0, 1.0) * bodyStr;
+                        vec3 rock = mix(mutedColor.rgb, bgColor.rgb, 0.5) * (0.7 + 0.5 * vnoise(p * 900.0 + bcell));
+                        rock *= skyAmb * (0.6 + 0.5 * n.y) * 1.2 + gSunLight * lit * 0.9;
+                        rock *= 1.0 - smoothstep(-0.25, 0.0, bq.y) * 0.45;       // wet, dark at the water
+                        rock = mix(rock, gFoliage * 0.35 * skyAmb * 1.4, smoothstep(0.5, 0.9, n.y) * gLeaf * 0.5 * step(0.5, vnoise(p * 300.0 + bcell)));
+                        rock = mix(rock, mix(fgColor.rgb, gSkyLow, 0.3) * (0.5 + 0.45 * gDaylight), snowG * smoothstep(0.55, 0.85, n.y));
+                        col = mix(col, rock, m);
+                    }
+                } else if (p.y < shoreY + 0.002) {
+                    // Its reflection, broken by the ripples.
+                    vec2 rq = bq + vec2(sin(p.y * 900.0 + time * 1.5) * 0.08 * (0.3 + gWindS), 0.0);
+                    float m = smoothstep(1.0, 0.85, length(rq) + lump) * smoothstep(1.0, 0.2, bq.y);
+                    col = mix(col, mix(bgColor.rgb, mutedColor.rgb, 0.3) * 0.35 * skyAmb * 1.2, m * 0.7);
+                }
+            }
         }
 
         if (gGrassAmt > 0.01) {
@@ -1594,6 +1695,10 @@ void main() {
                     float rx = rootX * inv;
                     float ry = WL + CAM_H * inv;
                     float hb = BLADE_H * inv * (0.45 + 0.9 * hash1(seedB + 2.1)) * (0.55 + 0.7 * clump) * gGrassH;
+                    // Short, sparse grass at the edge of the shore, fuller further in.
+                    float edgeIn = smoothstep(invFar, invFar * 1.20, inv);
+                    hb *= mix(0.40, 1.0, edgeIn);
+                    if (hash1(seedB + 11.0) > mix(0.50, 1.0, edgeIn)) continue;
                     // Wind: gust fronts roll across in world space; strong wind
                     // lays the blades over and makes them thrash.
                     float gust = fbm3(vec2(rootX * 5.0 - time * (0.35 + 2.2 * gWindS) * gWindDir, inv * 0.35));
