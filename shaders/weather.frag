@@ -452,7 +452,7 @@ vec3 skyAt(vec2 p, bool refl) {
         float bandD = dot(p, normalize(vec2(0.42, 1.0))) - 0.05;
         float mw = exp(-bandD * bandD / 0.018) * (0.4 + 0.9 * fbm5(p * 5.0 + 3.0))
                  * smoothstep(0.35, 0.65, fbm3(p * 9.0));
-        col += mix(fgColor.rgb, accentColor.rgb, 0.35) * mw * 0.16 * starVis * up;
+        col += mix(fgColor.rgb, accentColor.rgb, 0.35) * mw * 0.24 * starVis * up;
 
         for (int layer = 0; layer < 2; layer++) {
             float sc = layer == 0 ? 60.0 : 28.0;
@@ -466,7 +466,7 @@ vec3 skyAt(vec2 p, bool refl) {
                 float tw = 0.55 + 0.45 * sin(time * (0.6 + sh * 3.0) + sh * 70.0);
                 float size = layer == 0 ? 0.09 : 0.12;
                 vec3 sc3 = mix(fgColor.rgb, hsv2rgb(vec3(fract(gAccHsv.x + hash21(sid) * 0.3 - 0.15), 0.35, 1.0)), 0.4);
-                col += sc3 * (1.0 - smoothstep(0.0, size, d)) * tw * starVis * up * (layer == 0 ? 0.55 : 0.9);
+                col += sc3 * (1.0 - smoothstep(0.0, size, d)) * tw * starVis * up * (layer == 0 ? 0.80 : 1.25);
             }
         }
 
@@ -679,7 +679,7 @@ vec3 skyAt(vec2 p, bool refl) {
     // forest floor -- a forest with depth, not a fringe on the shore.
     {
         // The wooded hills follow the foot of the mountains behind them.
-        float hillTop = mix(WL - 0.006, midRidge(p.x), 0.22) - 0.022 * fbm3(vec2(p.x * 1.6 + 5.0, 2.0));
+        float hillTop = mix(WL - 0.006, midRidge(p.x), 0.22) - 0.022 * fbm3(vec2(p.x * 1.6 + 5.0, 2.0)) - 0.03 * smoothstep(0.35, 0.8, vnoise(vec2(p.x * 0.8 + 2.0, 11.0)));
         if (p.y > hillTop - 0.045) {
             for (int r = 0; r < 5; r++) {
                 float fr2 = float(r) / 4.0;
@@ -691,7 +691,7 @@ vec3 skyAt(vec2 p, bool refl) {
                     float cell = c0 + float(k);
                     float seedT = cell * 3.17 + float(r) * 41.3;
                     float cx = (cell + 0.5 + (hash1(seedT) - 0.5) * 0.6) * cellW;
-                    float top = mix(WL - 0.006, midRidge(cx), 0.22) - 0.022 * fbm3(vec2(cx * 1.6 + 5.0, 2.0));
+                    float top = mix(WL - 0.006, midRidge(cx), 0.22) - 0.022 * fbm3(vec2(cx * 1.6 + 5.0, 2.0)) - 0.03 * smoothstep(0.35, 0.8, vnoise(vec2(cx * 0.8 + 2.0, 11.0)));
                     // Each tree's own depth jitter, so rows dissolve into a scatter.
                     float baseY = mix(top + 0.006, WL + 0.003, fr2) + (hash1(seedT + 1.0) - 0.5) * 0.012;
                     // Thinner toward the top of the hill, and some clearings.
@@ -1629,6 +1629,53 @@ void main() {
         col = vec3(0.0);   // shore, painted below
     }
 
+    // A small island out in the lake, off to the side of the mark: a
+    // rocky hump with a few trees, and its own reflection (mirrored about
+    // its own waterline, not the far shore's), broken by the ripples.
+    {
+        const float IX = 0.86;
+        const float IW = 0.085;
+        const float IBASE = WL + 0.017;
+        if (abs(p.x - IX) < IW + 0.05) {
+            bool below = p.y > IBASE;
+            vec2 ip = below ? vec2(p.x + ripple.x * 2.5, 2.0 * IBASE - p.y + ripple.y) : p;
+            float ix = (ip.x - IX) / IW;
+            float rockTop = IBASE - 0.014 * max(1.0 - ix * ix, 0.0) * (0.8 + 0.4 * fbm3(vec2(ip.x * 60.0, 3.0)));
+            float rock = step(abs(ix), 1.0) * smoothstep(rockTop - 0.0008, rockTop + 0.0008, ip.y) * step(ip.y, IBASE);
+            vec3 ic = vec3(0.0);
+            float icov = 0.0;
+            if (rock > 0.0) {
+                vec3 rc = mix(mutedColor.rgb, bgColor.rgb, 0.5) * (0.7 + 0.5 * vnoise(ip * 700.0));
+                rc *= mix(gSkyTop, gSkyLow, 0.5) * 1.1 + gSunLight * (gIsDay ? gDaylight : 0.15) * 0.35 * (0.5 + 0.5 * sign(gBody.x - ip.x) * ix);
+                ic = rc; icov = rock;
+            }
+            for (int k = 0; k < 7; k++) {
+                float fk = float(k);
+                float cx = IX + (hash1(fk * 3.7 + 1.0) - 0.5) * IW * 1.3;
+                float cix = (cx - IX) / IW;
+                float by = IBASE - 0.014 * max(1.0 - cix * cix, 0.0) + 0.002;
+                float hT = 0.045 + 0.050 * hash1(fk * 5.1 + 2.0) * max(1.0 - abs(cix), 0.3);
+                float kind = hash1(fk * 9.3) < 0.25 ? 1.0 : 0.0;
+                float tt, sd;
+                float m = bgTree(ip, cx, by, hT, kind, fk * 13.0 + 40.0, tt, sd);
+                if (m > 0.0) { ic = mix(ic, bgTreeCol(kind, tt, sd, fk * 13.0 + 40.0, 0.05, cx), m); icov = max(icov, m); }
+            }
+            if (icov > 0.0) {
+                if (below) {
+                    // Reflection: darker, less contrast, fading with the ripples.
+                    vec3 rcol = mix(ic * 0.72, mix(bgColor.rgb * 0.35, gSkyTop * 0.25, 0.4), 0.25);
+                    col = mix(col, rcol, icov * 0.8);
+                } else {
+                    col = mix(col, ic, icov);
+                }
+            }
+            // A thin line of lapping light where the island meets the water.
+            col += mix(fgColor.rgb, gSkyLow, 0.4) * smoothstep(0.0012, 0.0, abs(p.y - IBASE)) * step(abs((p.x - IX) / IW), 0.95)
+                 * 0.10 * (0.4 + 0.6 * gDaylight);
+        }
+    }
+
+
     // ---- the meadow: every blade a particle on the ground plane ----
     // Blades are scattered in world space (x along the shore, depth z) and
     // projected: y = WL + CAM_H / z. Each has its own jittered depth, height,
@@ -2125,6 +2172,29 @@ void main() {
     vec3 fogCol = mix(gSkyLow, mix(mutedColor.rgb, fgColor.rgb, 0.5), 0.5) * (0.7 + 0.35 * gDaylight);
     fogCol += gBodyCol * exp(-length(p - gBody) * 2.5) * 0.15;
     col = mix(col, fogCol, fogAmt * 0.85);
+
+    // ---- colour grade: warm light, cool shade, moonlit nights ----
+    // The theme's accent turned toward blue is the shade/air colour; the
+    // theme's sunset colour is the light. Shadows lean cool, highlights lean
+    // warm (strongest at dusk), and night goes over to moonlight blue with
+    // the darks lifted a little so the scene still reads.
+    {
+        vec3 coolC = hsv2rgb(vec3(hueMix(gAccHsv.x, 0.62, 0.85), 0.40, 1.0));
+        vec3 warmC = hsv2rgb(vec3(hueMix(rgb2hsv(gDusk).x, 0.09, 0.3), 0.42, 1.0));
+        coolC /= max(luma(coolC), 1e-3);
+        warmC /= max(luma(warmC), 1e-3);
+        float L = luma(col);
+        float dusk = gTwilight * (1.0 - gGloom);
+        float shadowK = mix(0.18, 0.30, dusk) * (1.0 - gGloom * 0.5) * gDaylight;
+        float highK = (0.08 + 0.32 * dusk) * max(gDaylight, dusk);
+        col *= mix(vec3(1.0), coolC, smoothstep(0.45, 0.02, L) * shadowK);
+        col *= mix(vec3(1.0), warmC, smoothstep(0.25, 0.85, L) * highK);
+        float nightK = gNight * (1.0 - gTwilight * 0.6);
+        float moonFull = 0.5 - 0.5 * cos(moonPhase * 2.0 * PI);
+        vec3 moonlit = col * coolC * 1.10 + coolC * luma(bgColor.rgb) * 0.06 * (0.4 + 0.6 * moonFull);
+        // The moon, torches and the fire keep their own colour.
+        col = mix(col, moonlit, nightK * 0.65 * (1.0 - smoothstep(0.45, 0.85, L)));
+    }
 
     // Global flash and a soft vignette.
     col += mix(accentColor.rgb, fgColor.rgb, 0.35) * gFlash * 0.05;
