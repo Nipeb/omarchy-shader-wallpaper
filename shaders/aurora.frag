@@ -40,6 +40,8 @@ layout(binding = 2) uniform sampler2D distSource;
 // ---------------------------------------------------------------- noise ---
 
 float hash(vec2 p) {
+    // Periodic input keeps the hash well-mixed after days of uptime.
+    p = mod(p, 4096.0);
     p = fract(p * vec2(123.34, 456.21));
     p += dot(p, p + 45.32);
     return fract(p.x * p.y);

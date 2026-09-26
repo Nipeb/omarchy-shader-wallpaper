@@ -44,6 +44,10 @@ const float DT = 0.016;
 // ---------------------------------------------------------------- noise ---
 
 float hash21(vec2 p) {
+    // Periodic input: keeps the hash well-mixed for the huge coordinates a
+    // long-running clock produces (days of uptime), and is seamless because
+    // every lattice using it repeats exactly every 4096 cells.
+    p = mod(p, 4096.0);
     p = fract(p * vec2(123.34, 456.21));
     p += dot(p, p + 45.32);
     return fract(p.x * p.y);

@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "nipe.shader-wallpaper",
   "name": "Shader Wallpaper",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "author": "nipe",
   "description": "Animated, theme-colored and music-reactive GLSL wallpaper: aurora, thunderstorm, embers, a black-hole nebula, a live ink simulation and a seasonal lake landscape that follows your real weather, built around an icon of your choice. Replaces the stock background.",
   "kinds": [

@@ -76,6 +76,10 @@ float hash1(float n) {
 }
 
 float hash21(vec2 p) {
+    // Periodic input: keeps the hash well-mixed for the huge coordinates a
+    // long-running clock produces (days of uptime), and is seamless because
+    // every lattice using it repeats exactly every 4096 cells.
+    p = mod(p, 4096.0);
     p = fract(p * vec2(123.34, 456.21));
     p += dot(p, p + 45.32);
     return fract(p.x * p.y);
@@ -144,6 +148,13 @@ float warmScore(vec3 c) {
 }
 
 float luma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
+
+// A clock-driven scroll offset for a particle grid, in cell units, folded
+// into the 4096-cell period hash21 repeats with. Identical pattern, but the
+// numbers stay small, so particles don't snap to a grid after hours of uptime.
+float scroll(float cellsPerSecond) {
+    return mod(time * cellsPerSecond, 4096.0);
+}
 
 // ------------------------------------------------------ shared scene state ---
 // Set once in main(), read by the scene functions (also for the reflection).
@@ -2025,8 +2036,8 @@ void main() {
     vec3 rainCol = mix(mutedColor.rgb, fgColor.rgb, 0.45) * (0.55 + 0.45 * gDaylight);
     vec3 snowCol = fgColor.rgb * 1.05;
     if (wxRain > 0.01) {
-        vec2 q1 = vec2(p.x * 220.0 - p.y * slant * gWindDir, p.y * 24.0 - time * 7.0);
-        vec2 q2 = vec2(p.x * 150.0 - p.y * slant * 1.2 * gWindDir, p.y * 16.0 - time * 10.0);
+        vec2 q1 = vec2(p.x * 220.0 - p.y * slant * gWindDir, p.y * 24.0 - scroll(7.0));
+        vec2 q2 = vec2(p.x * 150.0 - p.y * slant * 1.2 * gWindDir, p.y * 16.0 - scroll(10.0));
         float r = 0.0;
         for (int k = 0; k < 2; k++) {
             vec2 q = k == 0 ? q1 : q2;
@@ -2047,7 +2058,7 @@ void main() {
         // world behind them washed out.
         float heavy = smoothstep(0.55, 1.0, wxRain);
         if (heavy > 0.0) {
-            vec2 q3 = vec2(p.x * 330.0 - p.y * slant * 0.9 * gWindDir, p.y * 36.0 - time * 12.0);
+            vec2 q3 = vec2(p.x * 330.0 - p.y * slant * 0.9 * gWindDir, p.y * 36.0 - scroll(12.0));
             vec2 id3 = floor(q3);
             vec2 f3 = fract(q3);
             if (hash21(id3 + 77.0) < 0.26 * heavy) {
@@ -2136,8 +2147,8 @@ void main() {
             float fl = float(layer);
             float scale = layer == 0 ? 34.0 : (layer == 1 ? 20.0 : 10.0);
             vec2 q = p * scale;
-            float drift = time * (0.25 + 4.5 * gWindS) * gWindDir * (0.8 + fl * 0.35);
-            float fall = time * (0.45 + fl * 0.2) * (1.0 - 0.55 * gWindS);
+            float drift = scroll((0.25 + 4.5 * gWindS) * (0.8 + fl * 0.35) * gWindDir);
+            float fall = scroll((0.45 + fl * 0.2) * (1.0 - 0.55 * gWindS));
             q += vec2(-drift, -fall);
             vec2 base = floor(q);
             for (int oy = -1; oy <= 1; oy++) {
@@ -2165,7 +2176,7 @@ void main() {
 
     // ---- precipitation in front of everything ----
     if (wxRain > 0.01) {
-        vec2 q = vec2(p.x * 90.0 - p.y * slant * 1.4 * gWindDir, p.y * 10.0 - time * 13.0);
+        vec2 q = vec2(p.x * 90.0 - p.y * slant * 1.4 * gWindDir, p.y * 10.0 - scroll(13.0));
         vec2 id = floor(q);
         vec2 f = fract(q);
         if (hash21(id + 57.0) < 0.05 * wxRain) {
@@ -2177,7 +2188,7 @@ void main() {
         // Big, close, fast streaks in a downpour.
         float heavyF = smoothstep(0.6, 1.0, wxRain);
         if (heavyF > 0.0) {
-            vec2 qn = vec2(p.x * 42.0 - p.y * slant * 1.8 * gWindDir, p.y * 5.0 - time * 16.0);
+            vec2 qn = vec2(p.x * 42.0 - p.y * slant * 1.8 * gWindDir, p.y * 5.0 - scroll(16.0));
             vec2 idn = floor(qn);
             vec2 fn = fract(qn);
             if (hash21(idn + 91.0) < 0.07 * heavyF) {
@@ -2197,8 +2208,8 @@ void main() {
             float amount = (layer == 0 ? 0.16 : (layer == 1 ? 0.12 : 0.05)) * wxSnow;
             float seed = float(layer) * 19.0 + 5.0;
             vec2 q = p * scale;
-            q.y -= time * fall;
-            q.x -= time * windX * gWindDir * (1.0 + float(layer) * 0.3);
+            q.y -= scroll(fall);
+            q.x -= scroll(windX * (1.0 + float(layer) * 0.3) * gWindDir);
             vec2 base = floor(q);
             float best = 0.0;
             for (int oy = -1; oy <= 1; oy++) {
@@ -2226,7 +2237,7 @@ void main() {
                 float fl2 = float(layer);
                 float sc = layer == 0 ? 95.0 : 48.0;
                 vec2 qd = vec2(p.x * sc - p.y * sc * 0.25 * drive * gWindDir * 0.3, p.y * sc * 0.35);
-                qd += vec2(-time * drive * (12.0 + fl2 * 8.0) * gWindDir, -time * (6.0 + fl2 * 4.0));
+                qd += vec2(-scroll(drive * (12.0 + fl2 * 8.0) * gWindDir), -scroll(6.0 + fl2 * 4.0));
                 vec2 idd = floor(qd);
                 vec2 fd = fract(qd);
                 if (hash21(idd + 55.0 + fl2 * 9.0) < (0.45 - fl2 * 0.12) * heavyS) {
@@ -2239,7 +2250,7 @@ void main() {
             }
             // Big flakes whipping past right in front, soft with nearness.
             {
-                vec2 qb = p * 11.0 + vec2(-time * drive * 1.6 * gWindDir, -time * 1.4);
+                vec2 qb = p * 11.0 + vec2(-scroll(drive * 1.6 * gWindDir), -scroll(1.4));
                 vec2 idb = floor(qb);
                 vec2 fb = fract(qb);
                 if (hash21(idb + 71.0) < 0.22 * heavyS) {
