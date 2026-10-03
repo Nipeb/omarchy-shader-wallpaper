@@ -4,12 +4,54 @@ An animated desktop background for Omarchy. It replaces the stock background
 with a live GLSL shader that follows your theme colors, reacts to the music
 that is playing, and is built around an icon of your choosing.
 
-![Aurora, thunder, nebula and embers](preview.png)
+Six styles, all drawn around the icon in the middle and colored by the
+current theme. The pictures use the default Omarchy logo and a different theme
+for each style.
 
-Styles: **aurora** (curtains of light), **thunder** (a storm over the sea),
-**embers**, **nebula** (the logo as a black hole), **ink** (a live dye
-simulation) and **weather** (a lake landscape under the sky over your actual
-location, right now).
+### Aurora
+
+Curtains of light with folding, ray-streaked hems over a heavy haze. Music
+quickens it slightly. *(Tokyo Night)*
+
+![Aurora](screenshots/aurora.jpg)
+
+### Thunder
+
+A storm over the sea: a cloud deck lit from inside, rain, and the odd bolt
+reaching the water, set off by loud moments in the music. *(Nord)*
+
+![Thunder](screenshots/thunder.jpg)
+
+### Embers
+
+Sparks rising off a fire bed below the screen, through heat shimmer and smoke.
+The beat sets how many sparks are born. *(Ristretto)*
+
+![Embers](screenshots/embers.jpg)
+
+### Nebula
+
+The logo as a black hole: a lensed accretion disc, a photon ring, polar jets
+and stars bent round the horizon. The disc pulses with the bass. *(Catppuccin)*
+
+![Nebula](screenshots/nebula.jpg)
+
+### Ink
+
+A live dye simulation: drops fall into moving water, curl into filaments and
+flow around the icon as if it were a solid object. *(Kanagawa)*
+
+![Ink](screenshots/ink.jpg)
+
+### Weather
+
+A lake landscape under the sky over your actual location, right now: real sun
+and moon, the current forecast, and the season from the date (see
+[Weather style](#weather-style)). *(Miasma)*
+
+![Weather, an autumn afternoon](screenshots/weather-day.jpg)
+
+![Weather, a snowy winter night with an aurora](screenshots/weather-night.jpg)
 
 ## Install
 
@@ -77,6 +119,7 @@ place; remove them with `omarchy pkg remove` if nothing else uses them.
 omarchy-wallpaper-shader next | prev | set <style> | list
 omarchy-wallpaper-shader on | off | toggle
 omarchy-wallpaper-shader audio on | off | toggle
+omarchy-wallpaper-shader quality high | medium | low   # see Performance
 omarchy-wallpaper-shader --testing  # weather test panel (see below)
 omarchy-wallpaper-icon image        # pick another PNG
 omarchy-wallpaper-icon omarchy      # back to the Omarchy logo (the default)
@@ -95,7 +138,7 @@ o.bind("SUPER + CTRL + W",  "Toggle shader wallpaper", "omarchy-wallpaper-shader
 
 ## Tuning
 
-`~/.config/omarchy/wallpaper-shader.conf` — audio strength, how much the
+`~/.config/omarchy/wallpaper-shader.conf` — rendering quality, audio strength, how much the
 pattern bends around the icon, outline glow, storm frequency, ember density,
 and so on. Edits apply live. It sits outside the plugin folder so
 `omarchy plugin update` never conflicts with it.
@@ -126,8 +169,48 @@ temperature, season, the occasional events, and skipping the clock ahead.
 Its overrides are live-only; **Close** (or `omarchy-wallpaper-shader testing
 off`) hides it and returns to the real weather.
 
-The weather style redraws at 30 fps (the others at 60), since it moves slowly
-and is the heaviest to draw.
+The weather style redraws at half the frame rate of the others, since it
+moves slowly and is the heaviest to draw.
+
+## Performance
+
+The wallpaper is drawn by the GPU on every frame, so it costs real GPU time
+even when windows cover it. On a fast card that is nothing to worry about; on
+an integrated GPU or an old laptop it can make the whole desktop sluggish. Pick
+a lower quality there:
+
+```sh
+omarchy-wallpaper-shader quality low     # or medium, or high (the default)
+```
+
+| Quality | Resolution | Frame rate (weather) | Cost vs high |
+|---|---|---|---|
+| `high` | 100% | 60 fps (30) | 1 |
+| `medium` | 75% | 30 fps (15) | about ¼ |
+| `low` | 50% | 30 fps (15) | about ⅛ |
+
+The command writes `quality = ...` to the tuning file, so it applies at once.
+At lower resolutions the picture is drawn smaller and scaled up, so it is a
+little softer, mostly on the icon's outline. For finer control, `render_scale`
+(0.25–1) and `max_fps` (5–60) in the tuning file override the preset.
+
+How busy each style keeps the GPU (frame time × frame rate). Measured
+offline, with the same shaders, on two GPUs:
+
+| Style | RTX 4080, 5120×1440, high | Ryzen 7000 iGPU (2 CU), 1920×1080: high | medium | low |
+|---|---|---|---|---|
+| aurora | 15% | too slow (~28 fps) | 61% | 27% |
+| thunder | 4% | 69% | 20% | 9% |
+| embers | 7% | too slow (~47 fps) | 36% | 16% |
+| nebula | 12% | too slow (~33 fps) | 52% | 23% |
+| ink | 11% | too slow (~41 fps) | 41% | 18% |
+| weather | 30% | too slow (~7 fps) | too slow (~13 fps) | 52% |
+
+The Ryzen 7000 desktop iGPU is about as weak as current GPUs get; a laptop
+Radeon 780M or Intel Iris Xe is several times faster. If even `low` is too
+much, choose a lighter style (thunder and embers are the cheapest, weather is
+by far the heaviest), lower `max_fps`, or switch the wallpaper off with
+`omarchy-wallpaper-shader off`.
 
 ## Working on the shaders
 
@@ -156,6 +239,7 @@ journalctl --user _COMM=quickshell | grep -E 'Failed to compile|error C'
 | `Background.qml` | the service: renders the wallpaper, drives audio and weather |
 | `shaders/` | GLSL sources and compiled `.qsb` |
 | `bin/` | the commands above, the icon renderer and the setup |
+| `screenshots/` | the pictures in this README |
 | `audio-cava.conf` | the private cava instance that feeds audio reactivity |
 | `wallpaper-shader.conf.default` | seed for the tuning file |
 | `LICENSE` | MIT, plus the external dependencies |

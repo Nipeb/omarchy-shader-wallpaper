@@ -39,18 +39,32 @@ Item {
   property real cfgAuroraRays: 1.0
   property real cfgWeatherPreviewCode: -1
   property real cfgWeatherPreviewPhase: -1
+  property string cfgQuality: "high"
+  property real cfgRenderScale: -1
+  property real cfgMaxFps: -1
+
+  // Quality presets trade sharpness and smoothness for GPU time. GPU cost
+  // scales with pixels drawn times frames per second, so "low" (half
+  // resolution each way, 30 fps) costs about an eighth of "high".
+  readonly property real renderScale: cfgRenderScale > 0 ? Math.max(0.25, Math.min(1, cfgRenderScale))
+                                     : cfgQuality === "low" ? 0.5 : cfgQuality === "medium" ? 0.75 : 1.0
+  readonly property real maxFps: cfgMaxFps > 0 ? Math.max(5, Math.min(60, cfgMaxFps))
+                                : cfgQuality === "high" ? 60 : 30
 
   function parseShaderConfig(rawText) {
     var lines = String(rawText || "").split("\n")
     var map = {}
+    var words = {}
     for (var i = 0; i < lines.length; i++) {
       var line = lines[i].trim()
       if (!line || line.charAt(0) === "#") continue
       var eq = line.indexOf("=")
       if (eq < 0) continue
       var key = line.slice(0, eq).trim()
-      var val = parseFloat(line.slice(eq + 1).trim())
+      var raw = line.slice(eq + 1).trim()
+      var val = parseFloat(raw)
       if (!isNaN(val)) map[key] = val
+      else words[key] = raw.toLowerCase()
     }
     cfgAudioLevelScale = map.audio_level_scale !== undefined ? map.audio_level_scale : 1.0
     cfgAudioPeakScale = map.audio_peak_scale !== undefined ? map.audio_peak_scale : 1.0
@@ -67,6 +81,9 @@ Item {
     cfgAuroraRays = map.aurora_rays !== undefined ? map.aurora_rays : 1.0
     cfgWeatherPreviewCode = map.weather_preview_code !== undefined ? map.weather_preview_code : -1
     cfgWeatherPreviewPhase = map.weather_preview_phase !== undefined ? map.weather_preview_phase : -1
+    cfgQuality = (words.quality === "low" || words.quality === "medium") ? words.quality : "high"
+    cfgRenderScale = map.render_scale !== undefined ? map.render_scale : -1
+    cfgMaxFps = map.max_fps !== undefined ? map.max_fps : -1
     if (typeof recomputeWeather === "function") recomputeWeather()
   }
 
@@ -658,8 +675,8 @@ Item {
   }
 
   // The weather landscape moves slowly and is by far the heaviest style, so
-  // it redraws at 30 fps; the music-driven styles keep 60.
-  readonly property int frameMs: shaderName === "weather" ? 33 : 16
+  // it redraws at half the frame rate of the music-driven styles.
+  readonly property int frameMs: Math.round(1000 / (shaderName === "weather" ? root.maxFps / 2 : root.maxFps))
 
   Timer {
     interval: root.frameMs
@@ -893,7 +910,7 @@ Item {
         hideSource: true
         live: root.shaderEnabled && root.shaderName === "ink"
         format: ShaderEffectSource.RGBA16F
-        textureSize: Qt.size(Math.max(2, Math.round(parent.width / 2)), Math.max(2, Math.round(parent.height / 2)))
+        textureSize: Qt.size(Math.max(2, Math.round(parent.width * root.renderScale / 2)), Math.max(2, Math.round(parent.height * root.renderScale / 2)))
         smooth: true
         wrapMode: ShaderEffectSource.ClampToEdge
       }
@@ -907,7 +924,9 @@ Item {
         property real time: root.shaderTime
         property real aspect: width / Math.max(height, 1)
         property real inkFlow: root.cfgInkFlow
-        property point inkTexel: Qt.point(1 / Math.max(2, Math.round(width / 2)), 1 / Math.max(2, Math.round(height / 2)))
+        property point inkTexel: Qt.point(1 / inkBuffer.textureSize.width, 1 / inkBuffer.textureSize.height)
+        // One sim step per redraw, so a lower frame rate takes bigger steps.
+        property real simStep: 60 / root.maxFps
         property var prevState: inkBuffer
         property var maskSource: maskTexture
         property var distSource: distTexture
@@ -919,6 +938,11 @@ Item {
         id: shaderLayer
         anchors.fill: parent
         visible: root.shaderEnabled
+        // Below full quality the shader draws into a smaller texture that is
+        // scaled up to the screen, so it runs for fewer pixels.
+        layer.enabled: root.renderScale < 0.999
+        layer.smooth: true
+        layer.textureSize: Qt.size(Math.max(2, Math.round(width * root.renderScale)), Math.max(2, Math.round(height * root.renderScale)))
 
         property real time: root.shaderTime
         property real aspect: width / Math.max(height, 1)

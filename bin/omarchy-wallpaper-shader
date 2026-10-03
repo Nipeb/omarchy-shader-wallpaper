@@ -7,6 +7,8 @@
 set -euo pipefail
 
 STATE_DIR="$HOME/.local/state/omarchy/wallpaper-shader"
+CONFIG_FILE="$HOME/.config/omarchy/wallpaper-shader.conf"
+PLUGIN="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 SHADERS=(aurora thunder embers nebula ink weather)
 mkdir -p "$STATE_DIR"
 
@@ -114,12 +116,31 @@ testing|--testing)
   *) echo "Usage: omarchy-wallpaper-shader testing <on|off|toggle>" >&2; exit 1 ;;
   esac
   ;;
+quality)
+  # Lives in the tuning file (the shell watches it), so it applies live and
+  # syncs with the rest of the tuning.
+  case "${2:-}" in
+  "")
+    q=$(sed -nE 's/^[[:space:]]*quality[[:space:]]*=[[:space:]]*([a-z]+).*/\1/p' "$CONFIG_FILE" 2>/dev/null | tail -n1)
+    echo "${q:-high}"
+    ;;
+  high|medium|low)
+    [[ -e $CONFIG_FILE ]] || { mkdir -p "$(dirname "$CONFIG_FILE")"; cp "$PLUGIN/wallpaper-shader.conf.default" "$CONFIG_FILE"; }
+    if grep -qE '^[[:space:]]*quality[[:space:]]*=' "$CONFIG_FILE"; then
+      sed -i -E "s/^[[:space:]]*quality[[:space:]]*=.*/quality = $2/" "$CONFIG_FILE"
+    else
+      printf '\n# Rendering quality: high, medium or low (see the README).\nquality = %s\n' "$2" >> "$CONFIG_FILE"
+    fi
+    ;;
+  *) echo "Usage: omarchy-wallpaper-shader quality [high|medium|low]" >&2; exit 1 ;;
+  esac
+  ;;
 current)
-  echo "enabled=$(current_enabled) shader=$(current_shader) audio=$(current_audio) testing=$(current_testing)"
+  echo "enabled=$(current_enabled) shader=$(current_shader) audio=$(current_audio) testing=$(current_testing) quality=$("$0" quality)"
   ;;
 *)
   cat >&2 <<USAGE
-Usage: omarchy-wallpaper-shader <on|off|toggle|next|prev|set <name>|list|audio <on|off|toggle>|testing <on|off|toggle>|--testing|current>
+Usage: omarchy-wallpaper-shader <on|off|toggle|next|prev|set <name>|list|audio <on|off|toggle>|testing <on|off|toggle>|--testing|quality [high|medium|low]|current>
 
   on|off|toggle       Switch the animated shader wallpaper on or off
   next|prev           Cycle to the next/previous shader style (also turns it on)
@@ -129,7 +150,9 @@ Usage: omarchy-wallpaper-shader <on|off|toggle|next|prev|set <name>|list|audio <
   testing <on|off|toggle>  Weather test panel: buttons bottom right to try every
                       condition, time of day, wind and temperature live
   --testing           Same as: testing on
-  current             Show the active style, on/off, audio and testing state
+  quality [high|medium|low]  Show or set rendering quality; medium and low
+                      draw at a lower resolution and frame rate for weaker GPUs
+  current             Show the active style, on/off, audio, testing and quality
 USAGE
   exit 1
   ;;

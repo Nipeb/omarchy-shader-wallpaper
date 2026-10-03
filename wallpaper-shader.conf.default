@@ -2,6 +2,18 @@
 # live, no restart or command needed. Delete a line (or the whole file) to
 # fall back to its default. Lines starting with # are comments.
 
+# Rendering quality, for weaker GPUs. GPU cost is pixels drawn times frames
+# per second:
+#   high   = full resolution, 60 fps (weather 30)
+#   medium = 75% resolution, 30 fps (weather 15) -- about a quarter of high
+#   low    = 50% resolution, 30 fps (weather 15) -- about an eighth of high
+# Or set `omarchy-wallpaper-shader quality low`. For finer control,
+# render_scale (0.25..1) and max_fps (5..60) override the preset; weather
+# always runs at half of max_fps.
+quality = high
+# render_scale = 0.5
+# max_fps = 30
+
 # How strongly audioLevel (smoothed loudness) and audioPeak (beat/transient)
 # drive each shader. 1.0 = the subtle baseline tuned 2026-09-16. 0 = off.
 # Turn these up if the effect feels too quiet, or use `omarchy-wallpaper-shader

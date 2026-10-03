@@ -32,6 +32,7 @@ layout(std140, binding = 0) uniform buf {
     float aspect;
     float inkFlow;
     vec2 inkTexel;
+    float simStep;     // redraw interval in 60 fps frames (2 at 30 fps)
 };
 
 layout(binding = 1) uniform sampler2D prevState;
@@ -181,7 +182,7 @@ void main() {
 
     // ---- transport ----
     vec2 v = velocity(p, d0, d1, d2);
-    float dt = DT * inkFlow;
+    float dt = DT * inkFlow * simStep;
     // Midpoint back-trace: follows curved streamlines instead of cutting
     // across them, which keeps vortex cores tight.
     vec2 mid = p - v * dt * 0.5;
@@ -196,7 +197,7 @@ void main() {
 
     // Slow fade, so the water clears between drops instead of saturating.
     // The tree's own dye fades faster; it is replenished continuously.
-    s *= vec4(0.99935, 0.99935, 0.99935, 0.9975);
+    s *= pow(vec4(0.99935, 0.99935, 0.99935, 0.9975), vec4(simStep));
 
     // ---- sources ----
     // A fresh drop: a dense bead that punches in over its first half second.
@@ -229,7 +230,7 @@ void main() {
     float patchy = smoothstep(0.45, 0.80, fbm3(p * 9.0 + vec2(t * 0.11, -t * 0.07)));
     add.a += rim * patchy * 0.045;
 
-    s += add;
+    s += add * simStep;
 
     // Solid tree: dye cannot sit inside it.
     s *= 1.0 - treeAt(p);
